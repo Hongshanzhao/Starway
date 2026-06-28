@@ -1,0 +1,38 @@
+/* 全局样式重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Microsoft YaHei", sans-serif;
+  background-color: #f5f7fa;
+}
+
+/* 滚动条优化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #c1c1c1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background-color: #f1f1f1;
+}
+
+/* 深色主题 */
+body.dark {
+  background-color: #1e1e1e;
+  color: #ddd;
+}
+body.dark a { color: #4ea1ff; }
+body.dark .page-header,
+body.dark .card,
+body.dark header,
+body.dark footer {
+  background-color: #2a2a2a;
+  color: #ddd;
+}
