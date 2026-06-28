@@ -9,7 +9,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Flask, jsonify, send_from_directory
-from flask_cors import CORS
+try:
+    from flask_cors import CORS
+except ImportError:
+    def CORS(*args, **kwargs):
+        return None
 from db import get_db, init_db
 from config import UPLOAD_FOLDER
 from routes import register_blueprints

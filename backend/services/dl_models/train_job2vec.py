@@ -28,10 +28,10 @@ def build_sequences():
     sequences = []
 
     # 方法1：同一大类下的岗位名列表（去重）
-    cur.execute("SELECT id, name FROM job_categories")
+    cur.execute("SELECT DISTINCT industry AS name FROM job WHERE industry IS NOT NULL AND industry != ''")
     categories = cur.fetchall()
     for cat in categories:
-        cur.execute("SELECT job_name FROM job WHERE category_id=? AND job_name IS NOT NULL", (cat['id'],))
+        cur.execute("SELECT job_name FROM job WHERE industry=? AND job_name IS NOT NULL", (cat['name'],))
         jobs = [row['job_name'] for row in cur.fetchall()]
         if len(jobs) >= 2:
             # 去重（保持原有顺序）

@@ -9,6 +9,7 @@ from .admin import admin_bp
 from .llm import llm_bp
 from .profile import profile_bp   # 新增
 from .assessment import assessment_bp
+from .assistant import assistant_bp
 
 def register_blueprints(app):
 
@@ -22,4 +23,5 @@ def register_blueprints(app):
     app.register_blueprint(profile_bp)  # 新增
 
     app.register_blueprint(assessment_bp)
+    app.register_blueprint(assistant_bp)
    

@@ -57,6 +57,11 @@ def sanitize_columns(columns):
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    try:
+        from services.data_importer import ensure_core_tables
+        ensure_core_tables(conn)
+    except Exception as e:
+        print(f"核心数据表初始化失败: {e}")
 
     # 如果存在 Excel 文件，自动创建 job 表并导入数据
     base_dir = os.path.dirname(__file__)
@@ -579,6 +584,15 @@ def init_db():
             ('专业技能', 'professional', 4),
             ('创新能力', 'innovation', 5)
         ])
+
+    # Drop legacy tables that may be created by historical init blocks above.
+    # This keeps startup idempotent after the Tianchi data rebuild.
+    try:
+        from services.db_cleanup import DROP_TABLES, LEGACY_UNUSED_TABLES
+        for table in sorted(LEGACY_UNUSED_TABLES | DROP_TABLES):
+            cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    except Exception as e:
+        print(f"legacy table cleanup skipped: {e}")
 
     conn.commit()
     conn.close()

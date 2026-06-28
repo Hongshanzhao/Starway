@@ -1,120 +1,66 @@
-# Backend 文件结构说明
+# Backend Structure
 
-本文档说明 `backend/` 目录下主要文件与目录的含义，便于维护与理解。
+Starway backend is a Flask + SQLite service for university career planning.
+The current rebuild keeps the existing API paths while moving the data layer to
+the Tianchi job, candidate, and application datasets.
 
----
+## Entry And Config
 
-## 🔷 核心模块详细说明
+- `app.py`: creates the Flask app, initializes the database, registers routes,
+  and configures CORS.
+- `config.py`: centralizes SQLite path, upload path, and LLM provider settings.
+  `LLM_PROVIDER` supports `local`, `auto`, `deepseek`, and `zhipu`.
+- `db.py`: initializes active business tables and drops unused legacy tables so
+  startup does not recreate old planning/resource tables.
 
-### 1. 入口与配置 (Entry & Config)
+## Routes
 
-**`app.py`** - 应用启动入口
-- 初始化 Flask，注册所有蓝图，配置中间件，启动服务
+- `routes/job.py`: job search, job details, job profile generation, and
+  recommendation-facing job APIs.
+- `routes/match.py`: candidate-job matching, gap analysis, and recommendation
+  endpoints.
+- `routes/profile.py`: student profile submission and resume-style structured
+  profile storage.
+- `routes/assessment.py`: career assessment questions, submission, and history.
+- `routes/report.py`: career report generation, export, and history.
+- `routes/assistant.py`: `/api/assistant/chat` intelligent Q&A endpoint.
+- `routes/llm.py`: preserved `/api/llm/*` compatibility endpoints.
+- `routes/auth.py`: login, registration, verification code, personal center,
+  reports, and browse history APIs.
 
-**`config.py`** - 全局配置中心
-- 管理数据库路径、API密钥（阿里云/智谱/DeepSeek）、LLM调用限流、文件上传路径等
+## Services
 
----
+- `services/data_importer.py`: creates/imports `jobs`, `candidates`,
+  `applications`, and the legacy-compatible `job` table.
+- `services/db_cleanup.py`: protects active tables, purges runtime/cache rows,
+  and drops unused legacy tables.
+- `services/llm_client.py`: provider switch for DeepSeek, Zhipu, local fallback,
+  and streaming.
+- `services/career_ai_service.py`: business-facing AI facade used by routes.
+- `services/ml_recommender.py`: offline Word2Vec/TextCNN-style lightweight
+  feature extraction and explainable candidate-job scoring helpers.
+- `services/llm_service.py`: thin compatibility facade for older imports; new
+  code should use the services above directly.
 
-### 2. 路由层 (Routes) —— 接口网关
+## Data
 
-路由层负责接收前端请求，通过权限校验后调用对应服务，并返回响应。
+Core Tianchi tables:
 
-**`auth.py`** - 路由前缀：`/api`
-- 用户全生命周期管理：登录、注册、验证码、修改密码、头像上传、浏览历史、个人中心
-- 核心装饰器：`@token_required`
-- 核心接口：`/login`， `/register`， `/user/profile`， `/user/history`
+- `jobs`
+- `candidates`
+- `applications`
 
-**`profile.py`** - 路由前缀：`/api/profile`
-- 学生档案与简历中心：提交手动档案、上传PDF/Word简历并AI解析、存储学生能力画像
-- 核心接口：`/submit`， `/upload`， `/{id}`
+Compatibility and active business tables:
 
-**`match.py`** - 路由前缀：`/api/match`
-- 人岗匹配核心：计算学生与岗位的多维匹配度、生成详细匹配报告、流式输出
-- 核心接口：`/recommend`， `/match`， `/match-stream`
+- `job`, `student`, `users`, `verification_codes`
+- `job_profile`, `job_relations`
+- `assessment_questions`, `assessment_results`
+- `match_history`, `report_history`, `reports`
+- `content`, `user_profiles`, `user_browse_history`
 
-**`llm.py`** - 路由前缀：`/api/llm`
-- 职业规划AI接口：触发职业规划生成、智能问答对话
-- 核心接口：`/test_connection`， `/generate_plan`， `/qa`
+Unused legacy tables such as old planning templates, mentor/resource tables,
+and obsolete interest/ability caches are removed by `cleanup_db.py` and are not
+left behind after app startup.
 
-**`job.py`** - 路由前缀：`/api/jobs`
-- 岗位数据中枢：岗位分类、岗位详情、画像生成、职业发展路径（垂直晋升/横向转型）
-- 核心接口：`/list`， `/detail`， `/recommend`， `/<job_name>/full-path`
-
-**`assessment.py`** - 路由前缀：`/api/assessment`
-- 职业测评：霍兰德等测评结果提交、测评历史查询
-- 核心接口：`/submit`， `/results`
-
-**`admin.py`** - 路由前缀：`/api/admin`
-- 管理员后台：管理员权限下的用户管理、数据管理、系统配置
-- 核心装饰器：`@admin_required`
-- 核心接口：`/users/list`
-
-**`report.py`** - 路由前缀：`/api/report`
-- 报告管理：统一管理用户生成的各类测评报告、匹配报告、规划报告
-- 核心接口：`/list`， `/view`
-
----
-
-### 3. 服务层 (Services) —— 业务逻辑核心
-
-服务层封装了具体的业务算法、数据处理逻辑，是路由层的依赖。
-
-**`llm_service.py`** - 🧠 AI服务核心
-1. **模型调度**：阿里云百炼 + DeepSeek +智谱（但最后只留用了阿里云的）
-2. **简历解析**：文本 -> 结构化技能/经历
-3. **岗位画像**：自动生成岗位技能/证书/软实力要求
-4. **路径图谱**：自动构建垂直晋升 + 横向转岗路径
-5. **工具函数**：相似度计算、技能同义词归一化、流式输出支持
-
----
-
-### 4. 数据存储 (Data)
-
-**`instance/career.db`**
-- 轻量级 SQLite 数据库文件，包含所有业务数据
-
----
-
-### 5. 废弃与备用 (Deprecated)
-
-**`backend/deprecated/`** - 🗑️ 废弃模块
-- 包含旧的算法实现和未启用的代码，仅作为备份，不参与主流程
-
-**`routes/path.py`** - ⚪ 未使用
-- 早期设计的静态路径模板代码，被现有的动态AI推荐/匹配机制替代，未被调用
-
----
-
-## 🔄 核心业务数据流
-
-**1. 数据准备**
-用户通过 `/profile` 上传简历或填写信息，系统生成学生画像
-
-**2. 测评匹配**
-用户完成 `/assessment`，结合画像进行 `/match` 分析
-
-**3. 规划生成**
-通过 `/llm/generate-plan` 结合匹配结果生成个性化职业规划
-
-**4. 内容查看**
-浏览 `/content` 下的学习资源及 `/job` 岗位详情
-
-**5. 数据持久化**
-所有操作历史记录在 `auth`（个人中心）和 `report`（报告管理）中查看
-
----
-
-## ⚠️ 关键设计亮点
-
-**1. AI 降级机制**
-所有 LLM 调用统一在 `llm_service.py` 管理，无 Key 时自动使用本地模板，保证演示可用性
-
-**2. 岗位画像体系**
-通过 `llm_service` 自动构建岗位画像，实现了通用技能与具体岗位要求的分离
-
-**3. 路径图谱**
-自动计算并存储岗位间的晋升（垂直）和转岗（横向）关系，支持可视化职业路径规划
-
-**4. 权限守卫**
-统一使用 `@token_required` 装饰器，精细化控制接口访问权限，兼顾安全性与开发效率
+`job_categories` has also been removed. The source of truth for category search
+is `jobs.job_category`, which is already present in the Tianchi dataset.

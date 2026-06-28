@@ -13,12 +13,11 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from .auth import admin_required, verify_token
-from services.llm_service import (
-    cluster_categories_with_zhipu,
-    assign_categories_by_keywords,
-    generate_category_profile_with_zhipu
+from services.career_ai_service import (
+    assign_jobs_to_categories,
+    build_category_profiles,
+    rebuild_job_graph,
 )
-from services.llm_service import rebuild_job_graph
 import json
 import time
 
@@ -119,38 +118,32 @@ def delete_user(user_id):
 def get_categories():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id, name, description FROM job_categories")
+    cur.execute("""
+        SELECT job_category AS name, COUNT(*) AS job_count
+        FROM jobs
+        WHERE job_category IS NOT NULL AND job_category != ''
+        GROUP BY job_category
+        ORDER BY job_category
+    """)
     rows = cur.fetchall()
     conn.close()
-    list_data = [dict(row) for row in rows]
+    list_data = [
+        {"id": index + 1, "name": row["name"], "description": f"{row['job_count']} jobs", "job_count": row["job_count"]}
+        for index, row in enumerate(rows)
+    ]
     return jsonify({"list": list_data})
 
 
 @admin_bp.route('/categories', methods=['POST'])
 @admin_required
 def add_category():
-    data = request.json or {}
-    name = data.get("name")
-    desc = data.get("description", "")
-    if not name:
-        return jsonify({"error": "name required"}), 400
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO job_categories (name, description) VALUES (?, ?)", (name, desc))
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "ok"})
+    return jsonify({"error": "job categories come from jobs.job_category and cannot be edited here"}), 400
 
 
 @admin_bp.route('/categories/<int:cid>', methods=['DELETE'])
 @admin_required
 def delete_category(cid):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM job_categories WHERE id = ?", (cid,))
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "deleted"})
+    return jsonify({"error": "job categories come from jobs.job_category and cannot be deleted here"}), 400
 
 
 # ====================== 岗位数据管理 ======================
@@ -174,10 +167,8 @@ def get_all_jobs():
             job.updated_at,
             job.company_info,
             job.source_url,
-            job.category_id,
-            job_categories.name as category_name
+            job.industry as category_name
         FROM job
-        LEFT JOIN job_categories ON job.category_id = job_categories.id
     ''')
     rows = cur.fetchall()
     conn.close()
@@ -195,8 +186,8 @@ def add_job():
         INSERT INTO job (
             job_name, location, salary_range, company, industry,
             company_size, company_type, job_code, job_description,
-            company_info, source_url, updated_at, category_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            company_info, source_url, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ''', (
         data.get('job_name'),
         data.get('location'),
@@ -209,8 +200,7 @@ def add_job():
         data.get('job_description'),
         data.get('company_info'),
         data.get('source_url'),
-        data.get('updated_at'),
-        data.get('category_id')
+        data.get('updated_at')
     ))
     conn.commit()
     conn.close()
@@ -227,7 +217,7 @@ def update_job(jid):
         UPDATE job SET
             job_name=?, location=?, salary_range=?, company=?, industry=?,
             company_size=?, company_type=?, job_code=?, job_description=?,
-            company_info=?, source_url=?, updated_at=?, category_id=?
+            company_info=?, source_url=?, updated_at=?
         WHERE rowid=?
     ''', (
         data.get('job_name'),
@@ -242,7 +232,6 @@ def update_job(jid):
         data.get('company_info'),
         data.get('source_url'),
         data.get('updated_at'),
-        data.get('category_id'),
         jid
     ))
     conn.commit()
@@ -268,31 +257,11 @@ def cluster_categories():
     data = request.get_json() or {}
     sample_size = data.get('sample_size', 500)
 
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM job_categories")
-    conn.commit()
-    conn.close()
-
-    categories = cluster_categories_with_zhipu(sample_size)
+    categories = [{"category_name": name, "job_titles": []} for name in build_category_profiles()]
     if not categories:
         return jsonify({'error': '聚类失败，未获得有效结果'}), 500
 
-    conn = get_db()
-    cursor = conn.cursor()
-    category_job_titles_map = {}
-    for cat in categories:
-        cat_name = cat.get('category_name')
-        job_titles = cat.get('job_titles', [])
-        if not cat_name:
-            continue
-        cursor.execute("INSERT INTO job_categories (name) VALUES (?)", (cat_name,))
-        conn.commit()
-        cat_id = cursor.lastrowid
-        category_job_titles_map[cat_name] = job_titles
-    conn.close()
-
-    assigned_count = assign_categories_by_keywords(category_job_titles_map)
+    assigned_count = assign_jobs_to_categories()
 
     return jsonify({
         'message': f'聚类完成，生成了 {len(categories)} 个大类，已为 {assigned_count} 个岗位分配类别',
@@ -303,16 +272,7 @@ def cluster_categories():
 @admin_bp.route('/generate-all-category-profiles', methods=['POST'])
 @admin_required
 def generate_all_category_profiles():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM job_categories")
-    cat_ids = [row['id'] for row in cursor.fetchall()]
-    conn.close()
-
-    success = []
-    for cat_id in cat_ids:
-        if generate_category_profile_with_zhipu(cat_id):
-            success.append(cat_id)
+    success = build_category_profiles()
 
     return jsonify({
         'message': f'成功生成 {len(success)} 个大类画像',

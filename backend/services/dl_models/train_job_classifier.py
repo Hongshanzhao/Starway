@@ -49,10 +49,10 @@ def load_data():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT job_name, job_description, category_id
+        SELECT job_name, job_description, industry
         FROM job
         WHERE job_description IS NOT NULL AND job_description != ''
-          AND category_id IS NOT NULL
+          AND industry IS NOT NULL AND industry != ''
     """)
     rows = cur.fetchall()
     conn.close()
@@ -61,7 +61,7 @@ def load_data():
     labels = []
     for row in rows:
         texts.append(f"{row['job_name']} {row['job_description']}")
-        labels.append(row['category_id'])
+        labels.append(row['industry'])
 
     # 将 category_id 映射为 0..N-1
     unique_cats = sorted(set(labels))
