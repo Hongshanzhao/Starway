@@ -1,9 +1,9 @@
 import json
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from db import get_db
 from services.llm_client import LLMClient, local_answer
-from services.ml_recommender import build_job_profile, recommend_jobs_for_candidate, split_skills
+from services.ml_recommender import build_job_profile, recommend_jobs_for_candidate
 
 
 def call_llm(prompt: str, temperature=0.3, max_tokens=2000, thinking=False, max_retries=1) -> str:
@@ -35,7 +35,7 @@ def chat_qa(question: str, context: str = "") -> str:
 
 def generate_plan_suggestion(student: Dict[str, Any], job_name: str) -> str:
     prompt = (
-        f"请为大学生生成面向「{job_name or '目标岗位'}」的职业规划建议，"
+        f"请为大学生生成面向「{job_name or '目标岗位'}」的职业规划建议："
         "包含技能提升、项目实践、简历优化和面试准备。\n"
         f"学生信息：{json.dumps(student or {}, ensure_ascii=False)}"
     )
@@ -51,9 +51,8 @@ def intelligent_recommendation(student: Dict[str, Any], jobs: List[Dict[str, Any
         "expected_salary_max": student.get("expected_salary_max") or 0,
         "education": student.get("education") or student.get("grade") or "",
     }
-    normalized_jobs = []
-    for job in jobs:
-        normalized_jobs.append({
+    normalized_jobs = [
+        {
             "job_id": job.get("job_id") or job.get("job_code") or job.get("id"),
             "job_title": job.get("job_title") or job.get("job_name"),
             "job_category": job.get("job_category") or job.get("industry"),
@@ -62,19 +61,28 @@ def intelligent_recommendation(student: Dict[str, Any], jobs: List[Dict[str, Any
             "requirements": job.get("requirements") or "",
             "salary_min": job.get("salary_min") or 0,
             "salary_max": job.get("salary_max") or 0,
-        })
-    recs = recommend_jobs_for_candidate(candidate, normalized_jobs, top_k=top_n)
-    return [{"job": rec, "match": {"overall_score": round(rec["score"] * 100, 1), **rec["explain"]}} for rec in recs]
+        }
+        for job in jobs
+    ]
+    recommendations = recommend_jobs_for_candidate(candidate, normalized_jobs, top_k=top_n)
+    return [
+        {
+            "job": item,
+            "match": {"overall_score": round(item["score"] * 100, 1), **item["explain"]},
+        }
+        for item in recommendations
+    ]
 
 
 def generate_dynamic_job_profile(job_name: str) -> Optional[Dict[str, Any]]:
     conn = get_db()
     try:
-        row = conn.execute("""
+        row = conn.execute(
+            """
             SELECT
-                job.job_code as job_id,
-                COALESCE(jobs.job_title, job.job_name) as job_title,
-                COALESCE(jobs.job_category, job.industry) as job_category,
+                job.job_code AS job_id,
+                COALESCE(jobs.job_title, job.job_name) AS job_title,
+                COALESCE(jobs.job_category, job.industry) AS job_category,
                 job.salary_range,
                 job.job_description,
                 job.company,
@@ -85,7 +93,9 @@ def generate_dynamic_job_profile(job_name: str) -> Optional[Dict[str, Any]]:
             FROM job
             LEFT JOIN jobs ON jobs.job_id = job.job_code
             WHERE job.job_name = ? LIMIT 1
-        """, (job_name,)).fetchone()
+            """,
+            (job_name,),
+        ).fetchone()
         if not row:
             return None
         return build_job_profile(dict(row))
@@ -99,13 +109,17 @@ def get_job_skills(job_name: str) -> List[str]:
         row = conn.execute("SELECT skills FROM job_profile WHERE job_name = ?", (job_name,)).fetchone()
         if row and row["skills"]:
             return json.loads(row["skills"])
-        job = conn.execute("""
-            SELECT job.job_name as job_title, job.industry as job_category,
+
+        job = conn.execute(
+            """
+            SELECT job.job_name AS job_title, job.industry AS job_category,
                    job.job_description, jobs.skills, jobs.requirements
             FROM job
             LEFT JOIN jobs ON jobs.job_id = job.job_code
             WHERE job.job_name = ? LIMIT 1
-        """, (job_name,)).fetchone()
+            """,
+            (job_name,),
+        ).fetchone()
         if job and job["job_description"]:
             return build_job_profile(dict(job))["skills"]
         return []
@@ -127,10 +141,14 @@ def rebuild_job_graph() -> Tuple[int, int]:
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM job_relations")
-        rows = cursor.execute("SELECT DISTINCT job_name, industry FROM job WHERE job_name IS NOT NULL LIMIT 50").fetchall()
+        rows = cursor.execute(
+            "SELECT DISTINCT job_name, industry FROM job WHERE job_name IS NOT NULL AND job_name != '' LIMIT 50"
+        ).fetchall()
+
         by_category: Dict[str, List[str]] = {}
         for row in rows:
             by_category.setdefault(row["industry"] or "通用", []).append(row["job_name"])
+
         lateral_count = 0
         for names in by_category.values():
             for left, right in zip(names, names[1:]):
@@ -139,20 +157,8 @@ def rebuild_job_graph() -> Tuple[int, int]:
                     (left, right, "transition", f"{left} 与 {right} 属于相近岗位方向，可按技能差距转型。"),
                 )
                 lateral_count += 1
+
         conn.commit()
         return 0, lateral_count
     finally:
         conn.close()
-
-
-def build_category_profiles():
-    conn = get_db()
-    try:
-        rows = conn.execute("SELECT DISTINCT job_category AS industry FROM jobs WHERE job_category IS NOT NULL AND job_category != ''").fetchall()
-        return [row["industry"] for row in rows]
-    finally:
-        conn.close()
-
-
-def assign_jobs_to_categories():
-    return 0

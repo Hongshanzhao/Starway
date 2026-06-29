@@ -25,8 +25,10 @@ the Tianchi job, candidate, and application datasets.
 - `routes/report.py`: career report generation, export, and history.
 - `routes/assistant.py`: `/api/assistant/chat` intelligent Q&A endpoint.
 - `routes/llm.py`: preserved `/api/llm/*` compatibility endpoints.
-- `routes/auth.py`: login, registration, verification code, personal center,
-  reports, and browse history APIs.
+- `routes/auth.py`: captcha, registration, login, disabled SMS endpoint, and
+  token/admin decorators.
+- `routes/user.py`: current user, profile, avatar, password, phone binding,
+  user reports, browse history, and personal statistics APIs.
 
 ## Services
 
@@ -39,8 +41,6 @@ the Tianchi job, candidate, and application datasets.
 - `services/career_ai_service.py`: business-facing AI facade used by routes.
 - `services/ml_recommender.py`: offline Word2Vec/TextCNN-style lightweight
   feature extraction and explainable candidate-job scoring helpers.
-- `services/llm_service.py`: thin compatibility facade for older imports; new
-  code should use the services above directly.
 
 ## Data
 
@@ -52,7 +52,7 @@ Core Tianchi tables:
 
 Compatibility and active business tables:
 
-- `job`, `student`, `users`, `verification_codes`
+- `job`, `student`, `users`
 - `job_profile`, `job_relations`
 - `assessment_questions`, `assessment_results`
 - `match_history`, `report_history`, `reports`

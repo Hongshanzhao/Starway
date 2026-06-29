@@ -196,7 +196,7 @@ class SkillPredictor:
     def predict(self, job_description: str, top_k: int = 5) -> List[dict]:
         text = clean_text(job_description)
         seq = self.processor.text_to_sequence(text)
-        t = torch.tensor([seq], dtype=torch.long).to(self.device)
+        t = torch.from_numpy(np.asarray([seq], dtype=np.int64)).to(self.device)
         with torch.no_grad():
             probs = torch.sigmoid(self.model(t)).cpu().numpy()[0]
         return self.label_extractor.decode(probs, top_k=top_k)

@@ -63,7 +63,7 @@ def load_data():
         texts.append(f"{row['job_name']} {row['job_description']}")
         labels.append(row['industry'])
 
-    # 将 category_id 映射为 0..N-1
+    # 将岗位类别映射为模型内部标签索引 0..N-1
     unique_cats = sorted(set(labels))
     cat2id = {cat: i for i, cat in enumerate(unique_cats)}
     id2cat = {i: cat for cat, i in cat2id.items()}

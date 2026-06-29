@@ -10,7 +10,6 @@ CORE_TABLES = {
     "assessment_questions", "assessment_results",
     "match_history", "report_history", "reports",
     "content", "user_profiles", "user_browse_history",
-    "verification_codes",
 }
 
 PURGE_DATA_TABLES = {
@@ -23,6 +22,8 @@ PURGE_DATA_TABLES = {
 
 DROP_TABLES = {
     "job_categories",
+    "job_legacy_with_category",
+    "verification_codes",
 }
 
 # Historical modules no longer used by the current Starway backend flow.

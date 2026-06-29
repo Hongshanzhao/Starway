@@ -1,5 +1,3 @@
-import os
-
 from flask import Blueprint, jsonify, request
 
 from db import get_db
@@ -13,17 +11,33 @@ llm_bp = Blueprint("llm", __name__, url_prefix="/api/llm")
 
 @llm_bp.route("/test_connection", methods=["GET"])
 def test_connection():
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        return jsonify({"status": "error", "message": "DEEPSEEK_API_KEY 未配置"}), 400
+    client = LLMClient(provider=request.args.get("provider"))
+    probe = [{"role": "user", "content": "请用一句话回答：1+1 等于几？"}]
+
+    if client.is_local:
+        result = client.chat(probe, max_tokens=100)
+        return jsonify({
+            "status": "ok",
+            "provider": client.provider,
+            "message": "Local fallback available",
+            "response": result[:100],
+        })
+
     try:
-        result = LLMClient(provider="deepseek").chat(
-            [{"role": "user", "content": "请用一句话回答：1+1 等于几？"}],
-            max_tokens=100,
-        )
-        return jsonify({"status": "ok", "message": "DeepSeek 连接成功", "response": result[:100]})
+        result = client.chat(probe, max_tokens=100)
+        return jsonify({
+            "status": "ok",
+            "provider": client.provider,
+            "message": f"{client.provider} connection succeeded",
+            "response": result[:100],
+        })
     except Exception as exc:
-        return jsonify({"status": "warning", "message": "DeepSeek 调用失败", "error": str(exc)}), 502
+        return jsonify({
+            "status": "warning",
+            "provider": client.provider,
+            "message": f"{client.provider} call failed",
+            "error": str(exc),
+        }), 502
 
 
 @llm_bp.route("/recommend", methods=["POST"])

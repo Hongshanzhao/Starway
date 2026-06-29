@@ -170,39 +170,19 @@ class JobPathRecommender:
         self.model = Job2Vec.load(model_path)
     
     def get_promotion_path(self, current_job: str, max_steps=3) -> List[str]:
-        """推荐晋升路径（通过向量演算模拟升级）"""
-        # 寻找代表“晋升”的方向向量
-        # 例如：高级工程师 - 中级工程师 = 晋升方向
-        promotion_pairs = [
-            ('高级工程师', '中级工程师'),
-            ('技术专家', '高级工程师'),
-            ('技术经理', '高级工程师'),
-            ('总监', '经理')
-        ]
-        # 计算平均晋升方向
-        direction = np.zeros(self.model.embedding_dim)
-        count = 0
-        for high, low in promotion_pairs:
-            if high in self.model.job2id and low in self.model.job2id:
-                hi_vec = self.model.embeddings[self.model.job2id[high]]
-                lo_vec = self.model.embeddings[self.model.job2id[low]]
-                direction += (hi_vec - lo_vec)
-                count += 1
-        if count > 0:
-            direction /= count
-        
-        # 从当前岗位逐步向上
+        """基于向量相似度推荐同赛道相邻发展路径。"""
+        if current_job not in self.model.job2id:
+            return []
+
         path = [current_job]
         current_vec = self.model.embeddings[self.model.job2id[current_job]]
         for _ in range(max_steps):
-            target_vec = current_vec + direction
-            # 找最接近的岗位
             best_job = None
             best_sim = -1
             for job_id, job_vec in enumerate(self.model.embeddings):
                 if self.model.id2job[job_id] in path:
                     continue
-                sim = np.dot(target_vec, job_vec) / (np.linalg.norm(target_vec) * np.linalg.norm(job_vec) + 1e-8)
+                sim = np.dot(current_vec, job_vec) / (np.linalg.norm(current_vec) * np.linalg.norm(job_vec) + 1e-8)
                 if sim > best_sim:
                     best_sim = sim
                     best_job = self.model.id2job[job_id]

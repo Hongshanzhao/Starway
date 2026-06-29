@@ -1,6 +1,6 @@
 """
 深度学习模型三：岗位自动分类（TextCNN 多分类）
-输入 job_name + job_description，预测 category_id
+输入 job_name + job_description，预测岗位类别标签
 """
 
 import torch
@@ -135,7 +135,7 @@ class JobClassifier:
         results = []
         for idx in top_indices:
             results.append({
-                'category_id': int(idx),
+                'label_id': int(idx),
                 'category_name': self.id2category.get(int(idx), f'未知({idx})'),
                 'probability': round(float(probs[idx]), 4)
             })

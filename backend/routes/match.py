@@ -6,7 +6,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from db import get_db
 from routes.auth import token_required
 from services.career_ai_service import call_llm
-from services.ml_recommender import build_job_profile, split_skills
+from services.ml_recommender import build_job_profile
 
 
 match_bp = Blueprint("match", __name__, url_prefix="/api/match")

@@ -24,9 +24,9 @@ python backend/scripts/import_tianchi_data.py --data-dir D:\caogao6\岗位数据
 Imported tables:
 
 - `jobs`: job postings from Tianchi.
-- `candidates`: job seeker profiles.
-- `applications`: application/matching records.
-- `job`: legacy compatibility table used by existing frontend routes.
+- `candidates`: Tianchi candidate capability records used for model training.
+- `applications`: Tianchi historical matching records used for algorithm evaluation.
+- `job`: normalized job display table synchronized from `jobs`.
 
 Example output:
 
@@ -116,11 +116,14 @@ Response:
 ```json
 {
   "success": true,
+  "model_source": "word2vec",
   "data": [
     {"job_id": 23, "similarity": 0.9123}
   ]
 }
 ```
+
+When the Word2Vec vector artifact is unavailable, the endpoint falls back to rule-based similarity and returns `"model_source": "rules"`.
 
 ## Match
 

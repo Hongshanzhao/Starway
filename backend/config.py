@@ -10,6 +10,23 @@ SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join(BASE_DIR, "instance", 
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
+WORD2VEC_JOB_VECTOR_PATH = os.getenv(
+    "WORD2VEC_JOB_VECTOR_PATH",
+    os.path.join(BASE_DIR, "data", "embeddings", "job_vectors_word2vec.pkl"),
+)
+TEXTCNN_SKILL_MODEL_PATH = os.getenv(
+    "TEXTCNN_SKILL_MODEL_PATH",
+    os.path.join(BASE_DIR, "data", "models", "skill_predictor.pth"),
+)
+TEXTCNN_SKILL_PROCESSOR_PATH = os.getenv(
+    "TEXTCNN_SKILL_PROCESSOR_PATH",
+    os.path.join(BASE_DIR, "data", "models", "skill_text_processor.pkl"),
+)
+TEXTCNN_SKILL_LABEL_PATH = os.getenv(
+    "TEXTCNN_SKILL_LABEL_PATH",
+    os.path.join(BASE_DIR, "data", "models", "skill_label_extractor.pkl"),
+)
+
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 
