@@ -41,6 +41,13 @@ def init_db():
     conn.commit()
     conn.close()
 
+    try:
+        from services import job_repository
+
+        job_repository.clear_cache()
+    except Exception:
+        pass
+
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(os.path.join(UPLOAD_FOLDER, "avatars"), exist_ok=True)
     print("数据库初始化完成，文件位置：", SQLITE_DB_PATH)
@@ -229,14 +236,23 @@ def _migrate_business_tables(cursor):
         ("work_json", "TEXT"),
         ("project_json", "TEXT"),
     ])
-    _add_missing_columns(cursor, "job", [
-        ("company_size", "TEXT"),
-        ("company_type", "TEXT"),
-        ("job_code", "TEXT"),
-        ("updated_at", "TEXT"),
-        ("source_url", "TEXT"),
-    ])
-    _remove_legacy_job_category_id(cursor)
+    if _table_exists(cursor, "job"):
+        _add_missing_columns(cursor, "job", [
+            ("company_size", "TEXT"),
+            ("company_type", "TEXT"),
+            ("job_code", "TEXT"),
+            ("updated_at", "TEXT"),
+            ("source_url", "TEXT"),
+        ])
+        _remove_legacy_job_category_id(cursor)
+
+
+def _table_exists(cursor, table: str) -> bool:
+    row = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
 
 
 def _remove_legacy_job_category_id(cursor):

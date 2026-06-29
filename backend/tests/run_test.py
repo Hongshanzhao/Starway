@@ -7,9 +7,9 @@ print('cwd', os.getcwd())
 init_db()
 conn = get_db()
 cursor = conn.cursor()
-cursor.execute("SELECT count(*) FROM job")
+cursor.execute("SELECT count(*) FROM jobs")
 print('jobs count', cursor.fetchone()[0])
-cursor.execute("SELECT * FROM job LIMIT 3")
+cursor.execute("SELECT rowid AS id, job_id, job_title, job_category, company_name, city FROM jobs LIMIT 3")
 for row in cursor.fetchall():
     print(dict(row))
 

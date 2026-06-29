@@ -88,6 +88,7 @@ def word2vec_similar_jobs(job_id: int, top_k: int = 10, path: Optional[str] = No
         seen_names.add(candidate_name)
         results.append({
             "job_id": candidate_id,
+            "job_name": candidate_name,
             "similarity": round(float(scores[candidate_idx]), 4),
         })
         if len(results) >= top_k:

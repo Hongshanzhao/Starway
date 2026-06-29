@@ -82,9 +82,9 @@ def load_and_tokenize():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT rowid as id, job_name
-        FROM job
-        WHERE job_name IS NOT NULL AND job_name != ''
+        SELECT rowid AS id, job_title AS job_name
+        FROM jobs
+        WHERE job_title IS NOT NULL AND job_title != ''
     """)
     rows = cur.fetchall()
     conn.close()

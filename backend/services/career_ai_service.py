@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from db import get_db
+from services import job_repository
 from services.llm_client import LLMClient, local_answer
 from services.ml_recommender import build_job_profile, recommend_jobs_for_candidate
 
@@ -75,32 +76,8 @@ def intelligent_recommendation(student: Dict[str, Any], jobs: List[Dict[str, Any
 
 
 def generate_dynamic_job_profile(job_name: str) -> Optional[Dict[str, Any]]:
-    conn = get_db()
-    try:
-        row = conn.execute(
-            """
-            SELECT
-                job.job_code AS job_id,
-                COALESCE(jobs.job_title, job.job_name) AS job_title,
-                COALESCE(jobs.job_category, job.industry) AS job_category,
-                job.salary_range,
-                job.job_description,
-                job.company,
-                jobs.skills,
-                jobs.requirements,
-                jobs.salary_min,
-                jobs.salary_max
-            FROM job
-            LEFT JOIN jobs ON jobs.job_id = job.job_code
-            WHERE job.job_name = ? LIMIT 1
-            """,
-            (job_name,),
-        ).fetchone()
-        if not row:
-            return None
-        return build_job_profile(dict(row))
-    finally:
-        conn.close()
+    row = job_repository.get_job_by_name(job_name)
+    return build_job_profile(row) if row else None
 
 
 def get_job_skills(job_name: str) -> List[str]:
@@ -110,30 +87,17 @@ def get_job_skills(job_name: str) -> List[str]:
         if row and row["skills"]:
             return json.loads(row["skills"])
 
-        job = conn.execute(
-            """
-            SELECT job.job_name AS job_title, job.industry AS job_category,
-                   job.job_description, jobs.skills, jobs.requirements
-            FROM job
-            LEFT JOIN jobs ON jobs.job_id = job.job_code
-            WHERE job.job_name = ? LIMIT 1
-            """,
-            (job_name,),
-        ).fetchone()
+        job = job_repository.get_job_by_name(job_name)
         if job and job["job_description"]:
-            return build_job_profile(dict(job))["skills"]
+            return build_job_profile(job)["skills"]
         return []
     finally:
         conn.close()
 
 
 def get_job_category(job_name: str) -> str:
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT industry FROM job WHERE job_name = ? LIMIT 1", (job_name,)).fetchone()
-        return row["industry"] if row and row["industry"] else ""
-    finally:
-        conn.close()
+    row = job_repository.get_job_by_name(job_name)
+    return row["industry"] if row and row["industry"] else ""
 
 
 def rebuild_job_graph() -> Tuple[int, int]:
@@ -141,9 +105,7 @@ def rebuild_job_graph() -> Tuple[int, int]:
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM job_relations")
-        rows = cursor.execute(
-            "SELECT DISTINCT job_name, industry FROM job WHERE job_name IS NOT NULL AND job_name != '' LIMIT 50"
-        ).fetchall()
+        rows = job_repository.all_jobs(limit=50)
 
         by_category: Dict[str, List[str]] = {}
         for row in rows:

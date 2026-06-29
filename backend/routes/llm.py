@@ -1,8 +1,8 @@
 from flask import Blueprint, jsonify, request
 
-from db import get_db
 from routes.auth import token_required
 from services import career_ai_service
+from services import job_repository
 from services.llm_client import LLMClient
 
 
@@ -46,11 +46,7 @@ def recommend():
     data = request.json or {}
     student = data.get("student") or {}
     top_n = int(data.get("top_n", 5))
-    conn = get_db()
-    try:
-        jobs = [dict(r) for r in conn.execute("SELECT * FROM job").fetchall()]
-    finally:
-        conn.close()
+    jobs = job_repository.all_jobs()
     recs = career_ai_service.intelligent_recommendation(student, jobs, top_n)
     return jsonify({"results": recs})
 

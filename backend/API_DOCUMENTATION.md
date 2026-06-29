@@ -109,7 +109,13 @@ Response:
 
 ### Similar Jobs
 
-`GET /api/jobs/{job_id}/similar?top_k=10`
+`GET /api/jobs/{job_id}/similar?top_k=10&include_same_title=false`
+
+Returns career-planning oriented adjacent roles. By default, the endpoint
+deduplicates by job name and excludes same-title postings, so the frontend gets
+career directions instead of repeated listings for the same role. Set
+`include_same_title=true` to include same-role postings for salary/company
+comparison.
 
 Response:
 
@@ -117,13 +123,33 @@ Response:
 {
   "success": true,
   "model_source": "word2vec",
+  "include_same_title": false,
   "data": [
-    {"job_id": 23, "similarity": 0.9123}
+    {
+      "job_id": 23,
+      "job_code": "JOB00023",
+      "job_name": "后端开发工程师",
+      "company": "星途科技",
+      "job_category": "技术",
+      "industry": "技术",
+      "salary_range": "12000-20000",
+      "location": "杭州",
+      "skills": "Java,Spring,Redis",
+      "similarity": 0.9123,
+      "relation_type": "adjacent_role",
+      "required_skills": ["API", "Java", "MySQL", "Redis", "Spring"],
+      "matched_skills": ["API", "Java", "Redis", "Spring"],
+      "missing_skills": ["MySQL"],
+      "why_similar": "为什么推荐：后端开发工程师与Java开发工程师处在相邻职业方向，能力迁移路径比较清晰。可迁移能力包括API、Java、Redis、Spring。建议补充MySQL。排序同时参考了 Word2Vec 岗位向量相似度。"
+    }
   ]
 }
 ```
 
-When the Word2Vec vector artifact is unavailable, the endpoint falls back to rule-based similarity and returns `"model_source": "rules"`.
+When the Word2Vec vector artifact is unavailable, the endpoint falls back to
+rule-based similarity and returns `"model_source": "rules"`. Both modes return
+display-ready job fields, transferable skills, missing skills, and a readable
+recommendation reason.
 
 ## Match
 

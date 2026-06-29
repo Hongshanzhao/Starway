@@ -5,7 +5,7 @@ from db import get_db
 
 CORE_TABLES = {
     "jobs", "candidates", "applications",
-    "job", "student", "users",
+    "student", "users",
     "job_relations",
     "assessment_questions", "assessment_results",
     "match_history", "report_history", "reports",
@@ -21,6 +21,7 @@ PURGE_DATA_TABLES = {
 }
 
 DROP_TABLES = {
+    "job",
     "job_categories",
     "job_legacy_with_category",
     "verification_codes",

@@ -46,8 +46,8 @@ def load_data():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT job_name, job_description
-        FROM job
+        SELECT job_title AS job_name, job_description
+        FROM jobs
         WHERE job_description IS NOT NULL AND job_description != ''
     """)
     rows = cur.fetchall()

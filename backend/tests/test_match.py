@@ -24,7 +24,7 @@ class MatchEndpointTests(unittest.TestCase):
         cur.execute("DELETE FROM match_history WHERE student_id = ?", (900001,))
         cur.execute("DELETE FROM student WHERE id = ?", (900001,))
         cur.execute("DELETE FROM job_profile WHERE job_name = ?", ("Python Backend Engineer",))
-        cur.execute("DELETE FROM job WHERE id = ?", (900001,))
+        cur.execute("DELETE FROM jobs WHERE rowid = ?", (900001,))
         cur.execute(
             """
             INSERT INTO student
@@ -44,8 +44,21 @@ class MatchEndpointTests(unittest.TestCase):
             ),
         )
         cur.execute(
-            "INSERT INTO job (id, job_name, company, job_description) VALUES (?, ?, ?, ?)",
-            (900001, "Python Backend Engineer", "Starway", "Python Flask SQL API development"),
+            """
+            INSERT INTO jobs
+            (rowid, job_id, job_title, job_category, company_name, skills, job_description, requirements)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                900001,
+                "MATCH-JOB-900001",
+                "Python Backend Engineer",
+                "Technology",
+                "Starway",
+                "Python,Flask,SQL",
+                "Python Flask SQL API development",
+                "Python Flask SQL",
+            ),
         )
         cur.execute(
             """
@@ -69,7 +82,7 @@ class MatchEndpointTests(unittest.TestCase):
             cur.execute("DELETE FROM match_history WHERE student_id = ?", (900001,))
             cur.execute("DELETE FROM student WHERE id = ?", (900001,))
             cur.execute("DELETE FROM job_profile WHERE job_name = ?", ("Python Backend Engineer",))
-            cur.execute("DELETE FROM job WHERE id = ?", (900001,))
+            cur.execute("DELETE FROM jobs WHERE rowid = ?", (900001,))
             conn.commit()
         finally:
             conn.close()

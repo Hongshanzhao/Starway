@@ -6,7 +6,9 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from db import get_db
 from routes.auth import token_required
 from services.career_ai_service import call_llm
+from services import job_repository
 from services.ml_recommender import build_job_profile
+from services.skill_normalizer import display_concepts, match_concepts
 
 
 match_bp = Blueprint("match", __name__, url_prefix="/api/match")
@@ -59,10 +61,7 @@ def get_job_abilities(job_name):
             "SELECT skills, certificates, soft_abilities FROM job_profile WHERE job_name = ?",
             (job_name,),
         ).fetchone()
-        job = conn.execute(
-            "SELECT job_name, industry, job_description, salary_range FROM job WHERE job_name = ? LIMIT 1",
-            (job_name,),
-        ).fetchone()
+        job = job_repository.get_job_by_name(job_name)
         if profile:
             return {
                 "skills": set(_load_json(profile["skills"], [])),
@@ -71,7 +70,7 @@ def get_job_abilities(job_name):
                 "job_description": job["job_description"] if job else "",
             }
         if job:
-            generated = build_job_profile(dict(job))
+            generated = build_job_profile(job)
             return {
                 "skills": set(generated["skills"]),
                 "certificates": set(generated["certificates"]),
@@ -84,10 +83,12 @@ def get_job_abilities(job_name):
 
 
 def compute_match(student_ability, job_ability, generate_gap=False, job_name=None):
-    student_skills = {s.lower() for s in student_ability.get("skills", set())}
-    job_skills = {s.lower() for s in job_ability.get("skills", set())}
-    overlap = student_skills & job_skills
-    skill_fit = len(overlap) / len(job_skills) if job_skills else 0.0
+    required_concepts, overlap, missing_concepts = match_concepts(
+        student_ability.get("skills", set()),
+        job_ability.get("skills", set()),
+        required_text=job_ability.get("job_description", ""),
+    )
+    skill_fit = len(overlap) / len(required_concepts) if required_concepts else 0.0
 
     student_certs = {s.lower() for s in student_ability.get("certificates", set())}
     job_certs = {s.lower() for s in job_ability.get("certificates", set())}
@@ -108,7 +109,8 @@ def compute_match(student_ability, job_ability, generate_gap=False, job_name=Non
         "experience_score": round(experience_score, 1),
         "debug_info": {
             "matched_skills": sorted(overlap),
-            "required_skills": sorted(job_skills),
+            "required_skills": sorted(required_concepts),
+            "missing_skills": sorted(missing_concepts),
         },
     }
     result["gap_analysis"] = generate_gap_analysis_with_llm(student_ability, job_ability, result) if generate_gap else {}
@@ -128,7 +130,12 @@ def _soft_similarity(student_soft, job_soft):
 
 
 def generate_gap_analysis_with_llm(student_ability, job_ability, match_detail):
-    need_skills = sorted({s for s in job_ability.get("skills", set()) if s.lower() not in {x.lower() for x in student_ability.get("skills", set())}})
+    _, _, missing_concepts = match_concepts(
+        student_ability.get("skills", set()),
+        job_ability.get("skills", set()),
+        required_text=job_ability.get("job_description", ""),
+    )
+    need_skills = display_concepts(missing_concepts)
     prompt = f"""
 请为大学生生成简洁的人岗匹配差距建议。
 匹配分：{match_detail['overall_score']}
@@ -164,13 +171,8 @@ def recommend():
     if not student.get("skills"):
         return jsonify({"error": "学生能力数据不完整，请先完善技能信息"}), 400
 
-    conn = get_db()
-    try:
-        rows = conn.execute("SELECT DISTINCT job_name FROM job WHERE job_name IS NOT NULL AND job_name != ''").fetchall()
-    finally:
-        conn.close()
     results = []
-    for row in rows:
+    for row in job_repository.all_jobs():
         job_name = row["job_name"]
         detail = compute_match(student, get_job_abilities(job_name), generate_gap=False, job_name=job_name)
         results.append({"job_name": job_name, **detail})

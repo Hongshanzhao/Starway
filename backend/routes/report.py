@@ -7,6 +7,7 @@ from flask import Blueprint, Response, jsonify, request, send_file, stream_with_
 from db import get_db
 from routes.match import compute_match, get_job_abilities, get_student_ability
 from services.career_ai_service import call_llm, call_llm_stream
+from services import job_repository
 
 
 report_bp = Blueprint("report", __name__, url_prefix="/api/report")
@@ -30,12 +31,8 @@ def _report_prompt(student, job_name, match_detail):
 
 
 def _default_job_name():
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT job_name FROM job ORDER BY rowid LIMIT 1").fetchone()
-        return row["job_name"] if row else "目标岗位"
-    finally:
-        conn.close()
+    rows = job_repository.all_jobs(limit=1)
+    return rows[0]["job_name"] if rows else "目标岗位"
 
 
 def _build_report(student_id, job_name):

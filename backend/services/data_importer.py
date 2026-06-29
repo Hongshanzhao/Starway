@@ -104,22 +104,6 @@ def ensure_core_tables(conn=None):
             FOREIGN KEY(candidate_id) REFERENCES candidates(candidate_id)
         )
     """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS job (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_name TEXT NOT NULL,
-            company TEXT,
-            industry TEXT,
-            salary_range TEXT,
-            job_description TEXT,
-            company_info TEXT,
-            location TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    _ensure_columns(cursor, "job", [
-        "company_size", "company_type", "job_code", "updated_at", "source_url",
-    ])
     if own_conn:
         conn.commit()
         conn.close()
@@ -133,35 +117,6 @@ def _replace_rows(cursor, table: str, columns: List[str], rows: List[dict]):
     values = [[row.get(col, "") for col in columns] for row in rows]
     cursor.executemany(sql, values)
     return len(values)
-
-
-def _sync_legacy_job(cursor, jobs: List[dict], reset: bool):
-    if reset:
-        cursor.execute("DELETE FROM job")
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'job'")
-    for row in jobs:
-        salary_min = row.get("salary_min") or ""
-        salary_max = row.get("salary_max") or ""
-        salary_range = f"{salary_min}-{salary_max}".strip("-")
-        description = "\n".join(
-            part for part in [row.get("job_description", ""), row.get("requirements", "")]
-            if part
-        )
-        cursor.execute("""
-            INSERT OR REPLACE INTO job (
-                id, job_name, company, industry, salary_range, job_description,
-                company_info, location, company_size, company_type, job_code,
-                updated_at, source_url
-            ) VALUES (
-                COALESCE((SELECT id FROM job WHERE job_code = ?), NULL),
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-        """, (
-            row.get("job_id"), row.get("job_title"), row.get("company_name"),
-            row.get("job_category"), salary_range, description, row.get("company_name"),
-            row.get("city"), row.get("company_size"), row.get("company_type"),
-            row.get("job_id"), row.get("publish_date"), row.get("job_id"),
-        ))
 
 
 def import_tianchi_dataset(data_dir: str = None, reset: bool = False) -> Dict[str, int]:
@@ -181,8 +136,13 @@ def import_tianchi_dataset(data_dir: str = None, reset: bool = False) -> Dict[st
         job_count = _replace_rows(cursor, "jobs", JOB_COLUMNS, jobs)
         candidate_count = _replace_rows(cursor, "candidates", CANDIDATE_COLUMNS, candidates)
         application_count = _replace_rows(cursor, "applications", APPLICATION_COLUMNS, applications)
-        _sync_legacy_job(cursor, jobs, reset=reset)
         conn.commit()
+        try:
+            from services import job_repository
+
+            job_repository.clear_cache()
+        except Exception:
+            pass
         return {
             "jobs": job_count,
             "candidates": candidate_count,

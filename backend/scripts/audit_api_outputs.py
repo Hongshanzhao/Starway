@@ -85,10 +85,14 @@ def seed_data():
         """,
         (900101, user_id, "audit", json.dumps({"R": 4}), "audit recommendation", json.dumps([]), datetime.now().isoformat()),
     )
-    cur.execute("DELETE FROM job WHERE id = ?", (900201,))
+    cur.execute("DELETE FROM jobs WHERE job_id = ?", ("AUDIT-JOB-900201",))
     cur.execute(
-        "INSERT INTO job (id, job_name, company, industry, job_description, location, salary_range) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (900201, "Audit Delete Job", "Audit Co", "Tech", "Audit job desc", "Hangzhou", "10000-15000"),
+        """
+        INSERT INTO jobs
+        (job_id, job_title, job_category, company_name, city, salary_min, salary_max, skills, job_description, requirements)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("AUDIT-JOB-900201", "Audit Delete Job", "Tech", "Audit Co", "Hangzhou", 10000, 15000, "Python,SQL", "Audit job desc", "Audit requirements"),
     )
     cur.execute("DELETE FROM user_browse_history WHERE id = ?", (900101,))
     cur.execute(
@@ -112,10 +116,19 @@ def seed_avatar_file():
 
 def get_fixtures():
     conn = get_db()
-    job_row = conn.execute("SELECT rowid AS id, job_name FROM job ORDER BY rowid LIMIT 1").fetchone()
+    job_row = conn.execute("SELECT rowid AS id, job_title AS job_name FROM jobs ORDER BY rowid LIMIT 1").fetchone()
+    delete_job_row = conn.execute(
+        "SELECT rowid AS id FROM jobs WHERE job_id = ?",
+        ("AUDIT-JOB-900201",),
+    ).fetchone()
     question = conn.execute("SELECT id FROM assessment_questions ORDER BY id LIMIT 1").fetchone()
     conn.close()
-    return int(job_row["id"]), job_row["job_name"], int(question["id"]) if question else 1
+    return (
+        int(job_row["id"]),
+        job_row["job_name"],
+        int(delete_job_row["id"]),
+        int(question["id"]) if question else 1,
+    )
 
 
 def is_json(resp):
@@ -145,7 +158,7 @@ def spec(method, path, kwargs=None, expected=200, kind="json"):
     return method, path, kwargs or {}, expected if isinstance(expected, set) else {expected}, kind
 
 
-def build_specs(user_id, admin_id, job_id, job_name, question_id):
+def build_specs(user_id, admin_id, job_id, job_name, delete_job_id, question_id):
     user_headers = {"Authorization": f"Bearer mock-token-{user_id}"}
     admin_headers = {"Authorization": f"Bearer mock-token-{admin_id}"}
     return [
@@ -203,7 +216,7 @@ def build_specs(user_id, admin_id, job_id, job_name, question_id):
         spec("GET", "/api/admin/jobs", {"headers": admin_headers}),
         spec("POST", "/api/admin/jobs", {"headers": admin_headers, "json": {"job_name": "Audit Admin Job", "industry": "Tech"}}),
         spec("PUT", f"/api/admin/jobs/{job_id}", {"headers": admin_headers, "json": {"job_name": job_name, "industry": "Tech"}}),
-        spec("DELETE", "/api/admin/jobs/900201", {"headers": admin_headers}),
+        spec("DELETE", f"/api/admin/jobs/{delete_job_id}", {"headers": admin_headers}),
         spec("GET", "/api/admin/category-summary", {"headers": admin_headers}),
         spec("POST", "/api/admin/build-job-graph", {"headers": admin_headers, "json": {}}),
         spec("GET", "/api/admin/reports", {"headers": admin_headers}),
@@ -249,8 +262,8 @@ def check_format(resp, kind):
 def main():
     user_id, admin_id = seed_data()
     try:
-        job_id, job_name, question_id = get_fixtures()
-        specs = build_specs(user_id, admin_id, job_id, job_name, question_id)
+        job_id, job_name, delete_job_id, question_id = get_fixtures()
+        specs = build_specs(user_id, admin_id, job_id, job_name, delete_job_id, question_id)
         results = []
         with app.test_client() as client:
             for method, path, kwargs, expected, kind in specs:

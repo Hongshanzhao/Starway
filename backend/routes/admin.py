@@ -1,8 +1,11 @@
+import time
+
 from flask import Blueprint, jsonify, request
 from werkzeug.security import check_password_hash
 
 from db import get_db
 from routes.auth import admin_required
+from services import job_repository
 from services.career_ai_service import rebuild_job_graph
 
 
@@ -30,6 +33,13 @@ def _category_rows():
         ).fetchall()
     finally:
         _close(conn)
+
+
+def _pick(data, current, *keys):
+    for key in keys:
+        if key in data:
+            return data.get(key)
+    return current
 
 
 @admin_bp.route("/login", methods=["POST"])
@@ -175,64 +185,47 @@ def delete_category(cid):
 @admin_bp.route("/jobs", methods=["GET"])
 @admin_required
 def get_all_jobs():
-    conn = get_db()
-    try:
-        rows = conn.execute(
-            """
-            SELECT
-                job.rowid AS id,
-                job.job_name,
-                job.location,
-                job.salary_range,
-                job.company,
-                job.industry,
-                job.company_size,
-                job.company_type,
-                job.job_code,
-                job.job_description,
-                job.updated_at,
-                job.company_info,
-                job.source_url,
-                job.industry AS category_name
-            FROM job
-            ORDER BY job.rowid
-            """
-        ).fetchall()
-    finally:
-        _close(conn)
-    return jsonify({"list": [dict(row) for row in rows]})
+    rows = job_repository.all_jobs()
+    return jsonify({"list": [{**row, "category_name": row["industry"]} for row in rows]})
 
 
 @admin_bp.route("/jobs", methods=["POST"])
 @admin_required
 def add_job():
     data = request.get_json(silent=True) or {}
+    job_code = data.get("job_code") or data.get("job_id") or f"MANUAL-{int(time.time())}"
+    job_name = data.get("job_name") or data.get("job_title")
+    if not job_name:
+        return jsonify({"error": "job_name is required"}), 400
     conn = get_db()
     try:
         conn.execute(
             """
-            INSERT INTO job (
-                job_name, location, salary_range, company, industry,
-                company_size, company_type, job_code, job_description,
-                company_info, source_url, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (
+                job_id, job_title, job_category, company_name, city,
+                company_size, company_type, salary_min, salary_max, salary_avg,
+                skills, job_description, requirements, publish_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                data.get("job_name"),
-                data.get("location"),
-                data.get("salary_range"),
-                data.get("company"),
-                data.get("industry"),
+                job_code,
+                job_name,
+                data.get("industry") or data.get("job_category"),
+                data.get("company") or data.get("company_name"),
+                data.get("location") or data.get("city"),
                 data.get("company_size"),
                 data.get("company_type"),
-                data.get("job_code"),
+                data.get("salary_min"),
+                data.get("salary_max"),
+                data.get("salary_avg"),
+                data.get("skills"),
                 data.get("job_description"),
-                data.get("company_info"),
-                data.get("source_url"),
-                data.get("updated_at"),
+                data.get("requirements"),
+                data.get("updated_at") or data.get("publish_date"),
             ),
         )
         conn.commit()
+        job_repository.clear_cache()
     finally:
         _close(conn)
     return jsonify({"status": "ok"})
@@ -244,31 +237,45 @@ def update_job(jid):
     data = request.get_json(silent=True) or {}
     conn = get_db()
     try:
+        row = conn.execute("SELECT * FROM jobs WHERE rowid = ?", (jid,)).fetchone()
+        if row is None:
+            return jsonify({"error": "job not found"}), 404
+        current = dict(row)
+        old_job_id = current.get("job_id")
+        new_job_id = _pick(data, old_job_id, "job_code", "job_id")
+        if not new_job_id:
+            return jsonify({"error": "job_id cannot be empty"}), 400
+        if new_job_id != old_job_id:
+            conn.execute("UPDATE applications SET job_id = ? WHERE job_id = ?", (new_job_id, old_job_id))
         conn.execute(
             """
-            UPDATE job SET
-                job_name = ?, location = ?, salary_range = ?, company = ?, industry = ?,
-                company_size = ?, company_type = ?, job_code = ?, job_description = ?,
-                company_info = ?, source_url = ?, updated_at = ?
+            UPDATE jobs SET
+                job_title = ?, city = ?, company_name = ?, job_category = ?,
+                company_size = ?, company_type = ?, job_id = ?, job_description = ?,
+                requirements = ?, publish_date = ?, skills = ?, salary_min = ?,
+                salary_max = ?, salary_avg = ?
             WHERE rowid = ?
             """,
             (
-                data.get("job_name"),
-                data.get("location"),
-                data.get("salary_range"),
-                data.get("company"),
-                data.get("industry"),
-                data.get("company_size"),
-                data.get("company_type"),
-                data.get("job_code"),
-                data.get("job_description"),
-                data.get("company_info"),
-                data.get("source_url"),
-                data.get("updated_at"),
+                _pick(data, current.get("job_title"), "job_name", "job_title"),
+                _pick(data, current.get("city"), "location", "city"),
+                _pick(data, current.get("company_name"), "company", "company_name"),
+                _pick(data, current.get("job_category"), "industry", "job_category"),
+                _pick(data, current.get("company_size"), "company_size"),
+                _pick(data, current.get("company_type"), "company_type"),
+                new_job_id,
+                _pick(data, current.get("job_description"), "job_description"),
+                _pick(data, current.get("requirements"), "requirements"),
+                _pick(data, current.get("publish_date"), "updated_at", "publish_date"),
+                _pick(data, current.get("skills"), "skills"),
+                _pick(data, current.get("salary_min"), "salary_min"),
+                _pick(data, current.get("salary_max"), "salary_max"),
+                _pick(data, current.get("salary_avg"), "salary_avg"),
                 jid,
             ),
         )
         conn.commit()
+        job_repository.clear_cache()
     finally:
         _close(conn)
     return jsonify({"status": "ok"})
@@ -279,8 +286,21 @@ def update_job(jid):
 def delete_job(jid):
     conn = get_db()
     try:
-        conn.execute("DELETE FROM job WHERE rowid = ?", (jid,))
+        row = conn.execute("SELECT job_id FROM jobs WHERE rowid = ?", (jid,)).fetchone()
+        if row is None:
+            return jsonify({"error": "job not found"}), 404
+        application_count = conn.execute(
+            "SELECT COUNT(*) AS total FROM applications WHERE job_id = ?",
+            (row["job_id"],),
+        ).fetchone()["total"]
+        if application_count:
+            return jsonify({
+                "error": "job has applications and cannot be deleted",
+                "application_count": application_count,
+            }), 409
+        conn.execute("DELETE FROM jobs WHERE rowid = ?", (jid,))
         conn.commit()
+        job_repository.clear_cache()
     finally:
         _close(conn)
     return jsonify({"status": "deleted"})

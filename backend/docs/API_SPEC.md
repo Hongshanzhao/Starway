@@ -299,7 +299,12 @@ data: {"type":"done"}
 
 ### `GET /api/jobs/{job_id}/similar`
 
-查询参数：`top_k`
+返回职业规划导向的相邻岗位方向。默认会按岗位名称去重，并排除同名招聘，避免把“相似岗位”变成同一岗位的重复招聘列表。
+
+查询参数：
+
+- `top_k`：返回数量，默认 `10`
+- `include_same_title`：是否包含同名岗位招聘样本，默认 `false`；设为 `true` 时同名岗位的 `relation_type` 为 `same_role_posting`
 
 响应：
 
@@ -307,11 +312,30 @@ data: {"type":"done"}
 {
   "success": true,
   "model_source": "word2vec",
-  "data": [{"job_id": 2, "similarity": 0.9123}]
+  "include_same_title": false,
+  "data": [
+    {
+      "job_id": 2,
+      "job_code": "JOB00002",
+      "job_name": "后端开发工程师",
+      "company": "星途科技",
+      "job_category": "技术",
+      "industry": "技术",
+      "salary_range": "12000-20000",
+      "location": "杭州",
+      "skills": "Java,Spring,Redis",
+      "similarity": 0.9123,
+      "relation_type": "adjacent_role",
+      "required_skills": ["API", "Java", "MySQL", "Redis", "Spring"],
+      "matched_skills": ["API", "Java", "Redis", "Spring"],
+      "missing_skills": ["MySQL"],
+      "why_similar": "为什么推荐：后端开发工程师与Java开发工程师处在相邻职业方向，能力迁移路径比较清晰。可迁移能力包括API、Java、Redis、Spring。建议补充MySQL。排序同时参考了 Word2Vec 岗位向量相似度。"
+    }
+  ]
 }
 ```
 
-`model_source` 为 `word2vec` 时表示使用岗位向量文件；为 `rules` 时表示模型不可用并回退到本地规则。
+`model_source` 为 `word2vec` 时表示使用岗位向量文件参与排序；为 `rules` 时表示模型不可用并回退到本地规则。两种模式都会返回可直接展示的岗位字段、技能迁移解释和技能缺口。
 
 ### `GET /api/jobs/profile/{job_name}`
 

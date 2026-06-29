@@ -16,9 +16,9 @@ def load_jobs_from_db():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT rowid as id, job_name, job_description
-        FROM job
-        WHERE job_name IS NOT NULL AND job_name != ''
+        SELECT rowid AS id, job_title AS job_name, job_description
+        FROM jobs
+        WHERE job_title IS NOT NULL AND job_title != ''
     """)
     rows = cur.fetchall()
     conn.close()

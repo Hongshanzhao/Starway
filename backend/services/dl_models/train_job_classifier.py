@@ -1,7 +1,4 @@
-"""
-训练岗位自动分类模型（TextCNN 多分类）
-从 job 表加载数据，处理类别不平衡，生成分类报告和混淆矩阵
-"""
+"""Train the job category classifier from the Tianchi jobs table."""
 
 import sys
 import os
@@ -49,8 +46,8 @@ def load_data():
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT job_name, job_description, industry
-        FROM job
+        SELECT job_title AS job_name, job_description, job_category AS industry
+        FROM jobs
         WHERE job_description IS NOT NULL AND job_description != ''
           AND industry IS NOT NULL AND industry != ''
     """)

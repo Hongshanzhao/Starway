@@ -1,6 +1,4 @@
-"""
-利用 job 表数据训练匹配模型（不依赖 student/match_history）
-"""
+"""Train the matching model from the Tianchi jobs table."""
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -34,7 +32,7 @@ class SyntheticDataset(Dataset):
 def generate_data():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT job_name, job_description FROM job WHERE job_description IS NOT NULL AND job_description != ''")
+    cur.execute("SELECT job_title AS job_name, job_description FROM jobs WHERE job_description IS NOT NULL AND job_description != ''")
     jobs = cur.fetchall()
     conn.close()
     if len(jobs) < 10:

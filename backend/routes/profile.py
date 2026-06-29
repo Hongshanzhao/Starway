@@ -101,13 +101,24 @@ def _extract_with_llm(text, data=None):
     return _rule_extract_profile(text, data)
 
 
+def _education_dict(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
 @profile_bp.route("/submit", methods=["POST"])
 def submit_profile():
     data = request.get_json(silent=True) or {}
     user_id = data.get("user_id")
     text = "\n".join(str(data.get(k, "")) for k in ["education", "work", "project", "skills_certs", "summary"])
     ability = _extract_with_llm(text, data)
-    major = data.get("major") or ability.get("education", {}).get("major", "")
+    education = _education_dict(ability.get("education"))
+    major = data.get("major") or education.get("major", "")
 
     conn = get_db()
     try:
@@ -125,7 +136,7 @@ def submit_profile():
                 user_id,
                 data.get("name"),
                 major,
-                data.get("grade") or ability.get("education", {}).get("degree", ""),
+                data.get("grade") or education.get("degree", ""),
                 json.dumps(ability.get("skills", []), ensure_ascii=False),
                 json.dumps(ability.get("certificates", []), ensure_ascii=False),
                 data.get("work", ""),
@@ -140,7 +151,7 @@ def submit_profile():
                 data.get("skills_certs", ""),
                 data.get("summary", ""),
                 json.dumps(ability.get("soft_abilities", {}), ensure_ascii=False),
-                json.dumps(ability.get("education", {}), ensure_ascii=False),
+                json.dumps(education, ensure_ascii=False),
                 json.dumps(ability.get("work_experience", []), ensure_ascii=False),
                 json.dumps(ability.get("project_experience", []), ensure_ascii=False),
             ),

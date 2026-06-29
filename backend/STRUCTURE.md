@@ -32,8 +32,8 @@ the Tianchi job, candidate, and application datasets.
 
 ## Services
 
-- `services/data_importer.py`: creates/imports `jobs`, `candidates`,
-  `applications`, and the legacy-compatible `job` table.
+- `services/data_importer.py`: creates/imports the Tianchi core tables:
+  `jobs`, `candidates`, and `applications`.
 - `services/db_cleanup.py`: protects active tables, purges runtime/cache rows,
   and drops unused legacy tables.
 - `services/llm_client.py`: provider switch for DeepSeek, Zhipu, local fallback,

@@ -1,6 +1,4 @@
-"""
-利用 job 表和分类信息训练 Word2Vec（去重 + 中文显示修复）
-"""
+"""Train Word2Vec job vectors from the Tianchi jobs table."""
 
 import sys
 import os
@@ -28,11 +26,11 @@ def build_sequences():
     sequences = []
 
     # 方法1：同一大类下的岗位名列表（去重）
-    cur.execute("SELECT DISTINCT industry AS name FROM job WHERE industry IS NOT NULL AND industry != ''")
+    cur.execute("SELECT DISTINCT job_category AS name FROM jobs WHERE job_category IS NOT NULL AND job_category != ''")
     categories = cur.fetchall()
     for cat in categories:
-        cur.execute("SELECT job_name FROM job WHERE industry=? AND job_name IS NOT NULL", (cat['name'],))
-        jobs = [row['job_name'] for row in cur.fetchall()]
+        cur.execute("SELECT job_title FROM jobs WHERE job_category=? AND job_title IS NOT NULL", (cat['name'],))
+        jobs = [row['job_title'] for row in cur.fetchall()]
         if len(jobs) >= 2:
             # 去重（保持原有顺序）
             unique_jobs = list(dict.fromkeys(jobs))

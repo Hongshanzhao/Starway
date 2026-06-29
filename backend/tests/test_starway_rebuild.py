@@ -26,7 +26,7 @@ def write_csv(path, rows):
 
 
 class StarwayRebuildTests(unittest.TestCase):
-    def test_tianchi_import_creates_core_tables_and_legacy_job_view(self):
+    def test_tianchi_import_creates_core_tables_without_legacy_job_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             os.environ["SQLITE_DB_PATH"] = str(tmp_path / "career.db")
@@ -101,9 +101,12 @@ class StarwayRebuildTests(unittest.TestCase):
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 1)
             self.assertEqual(cur.execute("SELECT COUNT(*) FROM applications").fetchone()[0], 1)
+            self.assertIsNone(cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='job'"
+            ).fetchone())
 
             legacy = cur.execute(
-                "SELECT id, job_name, company, salary_range, location, job_description FROM job"
+                "SELECT rowid AS id, job_title AS job_name, company_name AS company, printf('%.0f-%.0f', salary_min, salary_max) AS salary_range, city AS location, job_description || char(10) || requirements AS job_description FROM jobs"
             ).fetchone()
             conn.close()
             self.assertEqual(dict(legacy), {
@@ -293,8 +296,10 @@ class StarwayRebuildTests(unittest.TestCase):
         self.assertIn("jobs", CORE_TABLES)
         self.assertIn("candidates", CORE_TABLES)
         self.assertIn("applications", CORE_TABLES)
+        self.assertNotIn("job", CORE_TABLES)
         self.assertNotIn("verification_codes", CORE_TABLES)
         self.assertNotIn("job_categories", CORE_TABLES)
+        self.assertIn("job", DROP_TABLES)
         self.assertIn("job_categories", DROP_TABLES)
         self.assertIn("verification_codes", DROP_TABLES)
         self.assertIn("job_legacy_with_category", DROP_TABLES)
@@ -391,6 +396,84 @@ class StarwayRebuildTests(unittest.TestCase):
         names = {item["name"] for item in resp.get_json()}
         self.assertEqual(names, {"技术", "产品"})
 
+    def test_job_apis_use_jobs_core_table_without_legacy_job_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO jobs
+                    (job_id, job_title, job_category, company_name, company_size, company_type,
+                     city, education, experience, salary_min, salary_max, salary_avg, skills,
+                     job_description, requirements, publish_date, views, applications)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "JOBS-CORE-1", "Python开发工程师", "技术", "星途科技", "20-99人", "民营",
+                        "杭州", "本科", "应届", 10000, 18000, 14000, "Python,Flask,SQL",
+                        "负责后端服务开发和接口设计", "熟悉 Python Flask SQL", "2026-06-01", 10, 2,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO jobs
+                    (job_id, job_title, job_category, company_name, city, salary_min, salary_max,
+                     salary_avg, skills, job_description, requirements)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "JOBS-CORE-2", "数据分析师", "数据", "星途科技", "上海", 9000, 16000,
+                        12500, "Python,SQL,Excel", "分析业务数据并建设指标体系", "熟悉 SQL 和 BI",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        980001, "林同学", "大四", json.dumps(["Python", "SQL"]),
+                        json.dumps([]), json.dumps({}), "数据分析实习",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                search_resp = client.get("/api/jobs/search?page=1&size=5&keyword=Flask")
+                detail_resp = client.get("/api/jobs/1")
+                profile_resp = client.get("/api/jobs/1/profile")
+                names_resp = client.get("/api/jobs/names")
+                path_resp = client.get("/api/jobs/Python开发工程师/full-path")
+                recommend_resp = client.get("/api/match/recommend?student_id=980001&limit=2")
+
+        self.assertEqual(search_resp.status_code, 200, search_resp.get_data(as_text=True))
+        self.assertEqual(search_resp.get_json()["total"], 1)
+        self.assertEqual(search_resp.get_json()["items"][0]["job_name"], "Python开发工程师")
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.get_data(as_text=True))
+        self.assertEqual(detail_resp.get_json()["job_code"], "JOBS-CORE-1")
+        self.assertEqual(profile_resp.status_code, 200, profile_resp.get_data(as_text=True))
+        self.assertIn("Python", profile_resp.get_json()["skills"])
+        self.assertIn("Python开发工程师", names_resp.get_json())
+        self.assertEqual(path_resp.status_code, 200, path_resp.get_data(as_text=True))
+        self.assertEqual(path_resp.get_json()["job_name"], "Python开发工程师")
+        self.assertEqual(recommend_resp.status_code, 200, recommend_resp.get_data(as_text=True))
+        self.assertGreater(recommend_resp.get_json()["total"], 0)
+
     def test_admin_routes_do_not_expose_legacy_ai_category_workflows(self):
         admin_source = (BACKEND_DIR / "routes" / "admin.py").read_text(encoding="utf-8", errors="ignore")
         service_source = (BACKEND_DIR / "services" / "career_ai_service.py").read_text(encoding="utf-8", errors="ignore")
@@ -457,6 +540,77 @@ class StarwayRebuildTests(unittest.TestCase):
         self.assertEqual(data["total_categories"], 1)
         self.assertEqual(data["categories"][0]["name"], "技术")
         self.assertEqual(data["categories"][0]["job_count"], 2)
+
+    def test_admin_job_update_preserves_applications_and_delete_rejects_referenced_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                conn.execute(
+                    "INSERT INTO users (id, username, password_hash, role, is_active) VALUES (?, ?, ?, ?, 1)",
+                    (930101, "admin_job_user", "unused", "admin"),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO jobs (job_id, job_title, job_category, company_name, city)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("ADMIN-JOB-1", "Backend Engineer", "Tech", "Starway", "Hangzhou"),
+                )
+                conn.execute(
+                    "INSERT INTO candidates (candidate_id, name, skills) VALUES (?, ?, ?)",
+                    ("ADMIN-CAND-1", "Candidate", "Python"),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO applications (application_id, job_id, candidate_id, status)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    ("ADMIN-APP-1", "ADMIN-JOB-1", "ADMIN-CAND-1", "applied"),
+                )
+                conn.commit()
+                rowid = conn.execute(
+                    "SELECT rowid FROM jobs WHERE job_id = ?",
+                    ("ADMIN-JOB-1",),
+                ).fetchone()["rowid"]
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            headers = {"Authorization": "Bearer mock-token-930101"}
+            with app_module.app.test_client() as client:
+                update_resp = client.put(
+                    f"/api/admin/jobs/{rowid}",
+                    headers=headers,
+                    json={"job_name": "Senior Backend Engineer", "industry": "Tech"},
+                )
+                delete_resp = client.delete(f"/api/admin/jobs/{rowid}", headers=headers)
+
+            self.assertEqual(update_resp.status_code, 200, update_resp.get_data(as_text=True))
+            self.assertEqual(delete_resp.status_code, 409, delete_resp.get_data(as_text=True))
+
+            conn = db.get_db()
+            try:
+                job = conn.execute("SELECT job_id, job_title FROM jobs WHERE rowid = ?", (rowid,)).fetchone()
+                app = conn.execute(
+                    "SELECT job_id FROM applications WHERE application_id = ?",
+                    ("ADMIN-APP-1",),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(job["job_id"], "ADMIN-JOB-1")
+            self.assertEqual(job["job_title"], "Senior Backend Engineer")
+            self.assertEqual(app["job_id"], "ADMIN-JOB-1")
 
     def test_job_profile_generates_from_tianchi_fields_without_category_table(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -559,24 +713,24 @@ class StarwayRebuildTests(unittest.TestCase):
             try:
                 conn.execute(
                     """
-                    INSERT INTO job
-                    (id, job_name, company, industry, salary_range, job_description, company_size, job_code)
+                    INSERT INTO jobs
+                    (rowid, job_title, company_name, job_category, requirements, job_description, company_size, job_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (940001, "Python Backend Engineer", "Starway", "技术", "10000-18000", "Python Flask SQL", "20-99人", "PATH-1"),
                 )
                 conn.execute(
                     """
-                    INSERT INTO job
-                    (id, job_name, company, industry, salary_range, job_description, company_size, job_code)
+                    INSERT INTO jobs
+                    (rowid, job_title, company_name, job_category, requirements, job_description, company_size, job_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (940002, "Backend Architect", "Starway", "技术", "22000-35000", "Python SQL architecture distributed systems", "20-99人", "PATH-2"),
                 )
                 conn.execute(
                     """
-                    INSERT INTO job
-                    (id, job_name, company, industry, salary_range, job_description, company_size, job_code)
+                    INSERT INTO jobs
+                    (rowid, job_title, company_name, job_category, requirements, job_description, company_size, job_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (940003, "Product Analyst", "Starway", "产品", "12000-20000", "SQL product analytics", "20-99人", "PATH-3"),
@@ -620,7 +774,7 @@ class StarwayRebuildTests(unittest.TestCase):
                 ]
                 for row in rows:
                     conn.execute(
-                        "INSERT INTO job (id, job_name, industry, job_description) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
                         row,
                     )
                 conn.commit()
@@ -638,6 +792,14 @@ class StarwayRebuildTests(unittest.TestCase):
         scores = [item["similarity"] for item in data]
         self.assertNotEqual(scores, [0.8, 0.8])
         self.assertGreater(scores[0], scores[1])
+        first = data[0]
+        self.assertIn("job_name", first)
+        self.assertIn("job_category", first)
+        self.assertIn("skills", first)
+        self.assertIn("why_similar", first)
+        self.assertIn("relation_type", first)
+        self.assertIn("matched_skills", first)
+        self.assertIn("missing_skills", first)
 
     def test_similar_jobs_prefers_word2vec_vectors_when_available(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -663,10 +825,10 @@ class StarwayRebuildTests(unittest.TestCase):
                 for row in rows:
                     conn.execute(
                         """
-                        INSERT INTO job (id, job_name, industry, salary_range, job_description)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO jobs (rowid, job_title, job_category, job_description)
+                        VALUES (?, ?, ?, ?)
                         """,
-                        row,
+                        (row[0], row[1], row[2], row[4]),
                     )
                 conn.commit()
             finally:
@@ -692,7 +854,315 @@ class StarwayRebuildTests(unittest.TestCase):
         data = resp.get_json()
         self.assertEqual(data["model_source"], "word2vec")
         self.assertEqual(data["data"][0]["job_id"], 960002)
+        self.assertEqual(data["data"][0]["job_name"], "Flask Platform Engineer")
+        self.assertTrue(data["data"][0]["job_category"])
+        self.assertIn("salary_range", data["data"][0])
+        self.assertIn("skills", data["data"][0])
+        self.assertIn("why_similar", data["data"][0])
         self.assertGreater(data["data"][0]["similarity"], data["data"][1]["similarity"])
+
+    def test_similar_jobs_hydrates_word2vec_results_by_raw_name_before_rowid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            os.environ["SQLITE_DB_PATH"] = str(tmp_path / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ["WORD2VEC_JOB_VECTOR_PATH"] = str(tmp_path / "job_vectors_word2vec.pkl")
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (1, "Java开发工程师", "Tech", "Java Spring API"),
+                    (2, "媒介专员", "Market", "media campaign"),
+                    (3, "实施工程师", "Tech", "software implementation SQL Linux"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            with open(os.environ["WORD2VEC_JOB_VECTOR_PATH"], "wb") as f:
+                pickle.dump({
+                    "job_ids": [1, 2],
+                    "vectors": [
+                        [1.0, 0.0],
+                        [0.95, 0.05],
+                    ],
+                    "raw_names": ["Java开发工程师", "实施工程师"],
+                }, f)
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/1/similar?top_k=1")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()["data"]
+        self.assertEqual(data[0]["job_name"], "实施工程师")
+        self.assertEqual(data[0]["job_id"], 3)
+        self.assertNotEqual(data[0]["job_name"], "媒介专员")
+
+    def test_similar_jobs_default_returns_distinct_career_directions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ.pop("WORD2VEC_JOB_VECTOR_PATH", None)
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (970001, "Java开发工程师", "技术", "Java Spring Boot MySQL Redis API 后端开发"),
+                    (970002, "Java开发工程师", "技术", "Java Spring 微服务 高并发"),
+                    (970003, "后端开发工程师", "技术", "Java Spring Boot MySQL Redis 微服务 API"),
+                    (970004, "测试开发工程师", "技术", "Java Python 自动化测试 接口测试"),
+                    (970005, "大数据开发工程师", "技术", "Java SQL Spark Flink 数据平台"),
+                    (970006, "市场经理", "市场", "品牌营销 活动策划 销售渠道"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/970001/similar?top_k=3")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()["data"]
+        names = [item["job_name"] for item in data]
+        self.assertNotIn("Java开发工程师", names)
+        self.assertNotIn("市场经理", names)
+        self.assertEqual(len(names), len(set(names)))
+        self.assertIn("后端开发工程师", names)
+        self.assertIn("测试开发工程师", names)
+        first = data[0]
+        self.assertEqual(first["relation_type"], "adjacent_role")
+        self.assertTrue(first["matched_skills"])
+        self.assertIn("required_skills", first)
+        self.assertIn("missing_skills", first)
+        self.assertIn("为什么", first["why_similar"])
+
+    def test_similar_jobs_can_include_same_title_postings_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ.pop("WORD2VEC_JOB_VECTOR_PATH", None)
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (971001, "Java开发工程师", "技术", "Java Spring Boot MySQL Redis API"),
+                    (971002, "Java开发工程师", "技术", "Java Spring 微服务 高并发"),
+                    (971003, "后端开发工程师", "技术", "Java Spring Boot MySQL Redis 微服务 API"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/971001/similar?top_k=3&include_same_title=true")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()["data"]
+        same_title = [item for item in data if item["job_name"] == "Java开发工程师"]
+        self.assertTrue(same_title)
+        self.assertEqual(same_title[0]["relation_type"], "same_role_posting")
+
+    def test_similar_jobs_reuses_cached_job_features_between_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ.pop("WORD2VEC_JOB_VECTOR_PATH", None)
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (972001, "Java开发工程师", "技术", "Java Spring Boot MySQL Redis API 后端开发"),
+                    (972002, "后端开发工程师", "技术", "Java Spring Boot MySQL Redis 微服务 API"),
+                    (972003, "测试开发工程师", "技术", "Java Python 自动化测试 接口测试"),
+                    (972004, "大数据开发工程师", "技术", "Java SQL Spark Flink 数据平台"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            job_route = sys.modules["routes.job"]
+
+            with mock.patch.object(job_route, "concepts_from_skills", wraps=job_route.concepts_from_skills) as parser:
+                with app_module.app.test_client() as client:
+                    first = client.get("/api/jobs/972001/similar?top_k=3")
+                    first_calls = parser.call_count
+                    second = client.get("/api/jobs/972001/similar?top_k=3")
+                    second_calls = parser.call_count - first_calls
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertGreater(first_calls, 0)
+        self.assertEqual(second_calls, 0)
+
+    def test_admin_job_updates_clear_cached_job_features(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ.pop("WORD2VEC_JOB_VECTOR_PATH", None)
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                conn.execute(
+                    "INSERT INTO users (id, username, password_hash, role, is_active) VALUES (?, ?, ?, ?, 1)",
+                    (973001, "admin_cache_user", "unused", "admin"),
+                )
+                rows = [
+                    (973001, "Java开发工程师", "技术", "Java Spring Boot MySQL Redis API"),
+                    (973002, "后端开发工程师", "技术", "Java Spring Boot MySQL Redis 微服务 API"),
+                    (973003, "市场经理", "市场", "品牌营销 活动策划 销售渠道"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                headers = {"Authorization": "Bearer mock-token-973001"}
+                before = client.get("/api/jobs/973001/similar?top_k=2")
+                update = client.put(
+                    "/api/admin/jobs/973002",
+                    headers=headers,
+                    json={
+                        "job_name": "后端开发工程师",
+                        "job_id": "UPDATED-BACKEND",
+                        "industry": "技术",
+                        "skills": "Python,Flask",
+                        "job_description": "Python Flask API 后端开发",
+                    },
+                )
+                after = client.get("/api/jobs/973001/similar?top_k=2")
+
+        self.assertEqual(before.status_code, 200, before.get_data(as_text=True))
+        self.assertEqual(update.status_code, 200, update.get_data(as_text=True))
+        self.assertEqual(after.status_code, 200, after.get_data(as_text=True))
+        before_item = next(item for item in before.get_json()["data"] if item["job_name"] == "后端开发工程师")
+        after_item = next(item for item in after.get_json()["data"] if item["job_name"] == "后端开发工程师")
+        self.assertIn("Java", before_item["matched_skills"])
+        self.assertNotIn("Java", after_item["required_skills"])
+        self.assertIn("Python", after_item["required_skills"])
+
+    def test_similar_jobs_falls_back_to_rules_when_word2vec_artifact_cannot_match_current_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            os.environ["SQLITE_DB_PATH"] = str(tmp_path / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+            os.environ["WORD2VEC_JOB_VECTOR_PATH"] = str(tmp_path / "job_vectors_word2vec.pkl")
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (1, "Java开发工程师", "Tech", "Java Spring API"),
+                    (2, "后端开发工程师", "Tech", "Java Spring Redis API"),
+                    (3, "市场专员", "Market", "campaign brand sales"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            with open(os.environ["WORD2VEC_JOB_VECTOR_PATH"], "wb") as f:
+                pickle.dump({
+                    "job_ids": [1, 99991, 99992],
+                    "vectors": [
+                        [1.0, 0.0],
+                        [0.95, 0.05],
+                        [0.9, 0.1],
+                    ],
+                    "raw_names": ["Java开发工程师", "旧岗位A", "旧岗位B"],
+                }, f)
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/1/similar?top_k=2")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()
+        self.assertEqual(data["model_source"], "rules")
+        self.assertEqual(data["fallback_reason"], "word2vec_results_unmatched")
+        self.assertTrue(data["data"])
+        self.assertEqual(data["data"][0]["job_name"], "后端开发工程师")
+        self.assertIn("why_similar", data["data"][0])
 
     def test_full_path_uses_word2vec_vectors_for_path_ranking(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -718,10 +1188,10 @@ class StarwayRebuildTests(unittest.TestCase):
                 for row in rows:
                     conn.execute(
                         """
-                        INSERT INTO job (id, job_name, industry, salary_range, job_description)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO jobs (rowid, job_title, job_category, job_description)
+                        VALUES (?, ?, ?, ?)
                         """,
-                        row,
+                        (row[0], row[1], row[2], row[4]),
                     )
                 conn.commit()
             finally:
@@ -748,6 +1218,487 @@ class StarwayRebuildTests(unittest.TestCase):
         self.assertEqual(data["model_source"], "word2vec")
         self.assertIn("Analytics Engineer", json.dumps(data["vertical_path"], ensure_ascii=False))
         self.assertIn("Product Operations", json.dumps(data["lateral_paths"], ensure_ascii=False))
+
+    def test_lateral_paths_keep_java_engineer_inside_adjacent_technical_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (990001, "Java开发工程师", "技术", "Java Spring MySQL Redis 后端 API"),
+                    (990002, "后端开发工程师", "技术", "Java Spring 微服务 API MySQL"),
+                    (990003, "测试开发工程师", "技术", "Java Python 自动化测试 接口测试"),
+                    (990004, "大数据开发工程师", "技术", "Java SQL Spark Flink 数据平台"),
+                    (990005, "市场经理", "市场", "品牌推广 市场活动 用户增长"),
+                    (990006, "会计", "财务", "财务报表 税务 成本核算"),
+                    (990007, "市场专员", "市场", "市场推广 文案 活动执行"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO jobs (rowid, job_title, job_category, job_description)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java开发工程师/lateral")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        names = [item["to_job"] for item in resp.get_json()]
+        self.assertTrue(names)
+        self.assertIn("后端开发工程师", names)
+        self.assertNotIn("市场经理", names)
+        self.assertNotIn("会计", names)
+        self.assertNotIn("市场专员", names)
+
+    def test_lateral_paths_with_student_profile_return_personalized_transfer_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (991001, "Java Developer", "Tech", "Java Spring MySQL Redis backend API"),
+                    (991002, "Backend Engineer", "Tech", "Java Spring microservice API MySQL Redis"),
+                    (991003, "Test Development Engineer", "Tech", "Java Python automation testing API testing"),
+                    (991004, "Data Development Engineer", "Tech", "Java SQL Spark Flink data platform"),
+                    (991005, "Marketing Manager", "Market", "brand marketing sales campaign"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO jobs (rowid, job_title, job_category, job_description)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships, project_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        991001,
+                        "Student",
+                        "Senior",
+                        json.dumps(["Java", "SQL", "Spring"], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                        json.dumps([{"project_name": "Order API", "description": "Spring API and MySQL"}], ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java Developer/lateral?student_id=991001")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()
+        self.assertTrue(data)
+        first = data[0]
+        self.assertIn("match_score", first)
+        self.assertIn("transferable_skills", first)
+        self.assertIn("missing_skills", first)
+        self.assertIn("learning_plan", first)
+        self.assertIn("why_recommended", first)
+        self.assertIn("Java", first["transferable_skills"])
+        self.assertNotEqual(first["description"], data[-1]["description"])
+        self.assertNotIn("Marketing Manager", [item["to_job"] for item in data])
+
+    def test_lateral_paths_use_profile_skill_phrases_for_ranking_and_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (993001, "Java Developer", "Tech", "Java Spring MySQL Redis backend API"),
+                    (993002, "Backend Engineer", "Tech", "Java Spring Boot microservice API MySQL Redis"),
+                    (993003, "Test Development Engineer", "Tech", "Java Python automation testing API testing"),
+                    (993004, "Data Development Engineer", "Tech", "Java SQL Spark Flink data platform"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships, project_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        993001,
+                        "Student",
+                        "Senior",
+                        json.dumps([
+                            "Java backend development",
+                            "API development",
+                            "MySQL table design",
+                            "Spring Boot",
+                            "Redis cache",
+                        ], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                        json.dumps([{"project_name": "Order API", "description": "Spring Boot API MySQL Redis"}], ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java Developer/lateral?student_id=993001")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()
+        self.assertTrue(data)
+        self.assertEqual(data[0]["to_job"], "Backend Engineer")
+        self.assertGreaterEqual(data[0]["readiness_score"], 80)
+        self.assertIn("Java", data[0]["transferable_skills"])
+        self.assertIn("Spring Boot", data[0]["transferable_skills"])
+        self.assertIn("MySQL", data[0]["transferable_skills"])
+        self.assertNotIn("Java", data[0]["missing_skills"])
+        self.assertNotIn("Spring", data[0]["missing_skills"])
+        self.assertNotIn("MySQL", data[0]["missing_skills"])
+        self.assertGreater(data[0]["match_score"], data[-1]["match_score"])
+
+    def test_lateral_paths_add_role_family_core_gaps_and_avoid_overconfident_cross_track_scores(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (995001, "Java Developer", "Tech", "Java Spring Boot API MySQL Redis backend"),
+                    (995002, "Backend Engineer", "Tech", "Java Spring Boot microservice API MySQL Redis distributed system"),
+                    (995003, "Machine Learning Engineer", "Tech", "Java Redis machine learning PyTorch TensorFlow algorithm data modeling"),
+                    (995004, "机器学习工程师", "技术", "Java Redis 机器学习 深度学习 算法 PyTorch TensorFlow 数据建模"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        995001,
+                        "Student",
+                        "Senior",
+                        json.dumps([
+                            "Java backend development",
+                            "API development",
+                            "MySQL table design",
+                            "Spring Boot",
+                            "Redis cache",
+                        ], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java Developer/lateral?student_id=995001")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()
+        names = [item["to_job"] for item in data]
+        self.assertEqual(names[0], "Backend Engineer")
+        ml_item = next(item for item in data if item["to_job"] == "Machine Learning Engineer")
+        zh_ml_item = next(item for item in data if item["to_job"] == "机器学习工程师")
+        self.assertLess(ml_item["readiness_score"], 80)
+        self.assertLess(zh_ml_item["readiness_score"], 80)
+        self.assertIn("Machine Learning", ml_item["missing_skills"])
+        self.assertIn("Machine Learning", zh_ml_item["missing_skills"])
+        self.assertIn("risk", ml_item)
+        self.assertIn("risk", zh_ml_item)
+        self.assertGreater(len(ml_item["learning_plan"]), 0)
+        self.assertGreater(len(zh_ml_item["learning_plan"]), 0)
+
+    def test_lateral_paths_exclude_promotion_level_management_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (996001, "Java开发工程师", "技术", "Java Spring Boot API MySQL Redis 后端"),
+                    (996002, "后端开发工程师", "技术", "Java Spring Boot API MySQL Redis 微服务"),
+                    (996003, "技术总监", "技术", "Java Redis 架构 团队管理 技术规划"),
+                    (996004, "研发经理", "技术", "Java 项目管理 团队管理 交付管理"),
+                    (996005, "架构师", "技术", "Java 分布式 架构设计 技术方案"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        996001,
+                        "Student",
+                        "Senior",
+                        json.dumps(["Java backend development", "Spring Boot", "MySQL table design", "Redis cache"], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java开发工程师/lateral?student_id=996001")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        names = [item["to_job"] for item in resp.get_json()]
+        self.assertIn("后端开发工程师", names)
+        self.assertNotIn("技术总监", names)
+        self.assertNotIn("研发经理", names)
+        self.assertNotIn("架构师", names)
+
+    def test_match_recommend_uses_phrase_skill_normalization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (994001, "Backend Engineer", "Tech", "Java Spring Boot API MySQL Redis"),
+                    (994002, "Data Development Engineer", "Tech", "Python SQL Spark Flink data platform"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        994001,
+                        "Student",
+                        "Senior",
+                        json.dumps([
+                            "Java backend development",
+                            "API development",
+                            "MySQL table design",
+                            "Spring Boot",
+                            "Redis cache",
+                        ], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/match/recommend?student_id=994001&limit=2")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        results = resp.get_json()["results"]
+        self.assertEqual(results[0]["job_name"], "Backend Engineer")
+        self.assertGreaterEqual(results[0]["skill_fit"], 80)
+        self.assertIn("java", results[0]["debug_info"]["matched_skills"])
+        self.assertIn("mysql", results[0]["debug_info"]["matched_skills"])
+        self.assertIn("redis", results[0]["debug_info"]["matched_skills"])
+
+    def test_full_path_with_student_profile_personalizes_vertical_and_lateral_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+
+            conn = db.get_db()
+            try:
+                rows = [
+                    (992001, "Java Developer", "Tech", "Java Spring SQL backend API"),
+                    (992002, "Senior Java Developer", "Tech", "Java Spring Cloud Redis MQ distributed system"),
+                    (992003, "Backend Architect", "Tech", "system design microservice distributed architecture"),
+                    (992004, "Test Development Engineer", "Tech", "Java Python automation testing API testing"),
+                ]
+                for row in rows:
+                    conn.execute(
+                        "INSERT INTO jobs (rowid, job_title, job_category, job_description) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+                conn.execute(
+                    """
+                    INSERT INTO student
+                    (id, name, grade, skills, certificates, soft_abilities, internships)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        992001,
+                        "Student",
+                        "Senior",
+                        json.dumps(["Java", "SQL"], ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        "Java backend internship",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            with app_module.app.test_client() as client:
+                resp = client.get("/api/jobs/Java Developer/full-path?student_id=992001")
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        data = resp.get_json()
+        self.assertEqual(data["student_id"], 992001)
+        self.assertTrue(data["vertical_path"])
+        self.assertTrue(data["lateral_paths"])
+        self.assertIn("readiness_score", data["vertical_path"][0])
+        self.assertIn("missing_skills", data["vertical_path"][0])
+        self.assertIn("match_score", data["lateral_paths"][0])
+        self.assertIn("learning_plan", data["lateral_paths"][0])
+
+    def test_profile_submit_accepts_list_education_from_ai_parser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SQLITE_DB_PATH"] = str(Path(tmp) / "career.db")
+            os.environ["LLM_PROVIDER"] = "local"
+
+            import config
+            import db
+
+            importlib.reload(config)
+            importlib.reload(db)
+            db.init_db()
+            conn = db.get_db()
+            try:
+                conn.execute(
+                    "INSERT INTO users (id, username, password_hash, role, is_active) VALUES (?, ?, ?, ?, 1)",
+                    (1, "profile_list_user", "unused", "user"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            import backend.app as app_module
+            importlib.reload(app_module)
+            import backend.routes.profile as profile_route
+
+            with mock.patch.object(profile_route, "_extract_with_llm") as extractor:
+                extractor.return_value = {
+                    "skills": ["Java", "SQL"],
+                    "certificates": [],
+                    "soft_abilities": {},
+                    "education": [{"major": "Computer Science", "degree": "Bachelor"}],
+                    "work_experience": [],
+                    "project_experience": [],
+                }
+                with app_module.app.test_client() as client:
+                    resp = client.post("/api/profile/submit", json={
+                        "user_id": 1,
+                        "name": "Student",
+                        "skills": ["Java", "SQL"],
+                    })
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        self.assertIn("student_id", resp.get_json())
 
     def test_job_skills_uses_textcnn_predictor_when_available(self):
         os.environ["LLM_PROVIDER"] = "local"

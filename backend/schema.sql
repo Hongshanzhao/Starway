@@ -99,23 +99,6 @@ CREATE TABLE IF NOT EXISTS applications (
     status TEXT
 );
 
-CREATE TABLE IF NOT EXISTS job (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_name TEXT NOT NULL,
-    location TEXT,
-    salary_range TEXT,
-    company TEXT,
-    industry TEXT,
-    company_size TEXT,
-    company_type TEXT,
-    job_code TEXT,
-    job_description TEXT,
-    updated_at TEXT,
-    company_info TEXT,
-    source_url TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS job_profile (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_name TEXT UNIQUE,
