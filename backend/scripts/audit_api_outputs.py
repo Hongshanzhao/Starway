@@ -7,6 +7,11 @@ import base64
 from datetime import datetime
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from werkzeug.security import generate_password_hash
 
 

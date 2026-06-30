@@ -144,8 +144,21 @@ def _cached_list_industries() -> Tuple[str, ...]:
         conn.close()
 
 
+GROUP_KEYWORDS = {
+    "tech": {"industries": ["技术"], "keywords": []},
+    "product": {"industries": ["产品"], "keywords": []},
+    "data": {
+        "industries": ["技术"],
+        "title_keywords": ["数据", "分析", "算法", "机器学习", "深度学习", "BI", "大数据"],
+        "keywords": ["数据", "分析", "算法", "机器学习", "深度学习", "BI", "Python", "SQL", "Pandas", "NumPy", "TensorFlow", "PyTorch", "大数据"],
+    },
+    "operation": {"industries": ["运营"], "keywords": []},
+    "business": {"industries": ["市场"], "keywords": ["商务", "销售", "市场", "客户", "渠道"]},
+}
+
+
 def search_jobs(keyword: str = "", industry: str = "", company_size: str = "",
-                page: int = 1, size: int = 10, order: str = "asc") -> Tuple[int, List[Dict]]:
+                page: int = 1, size: int = 10, order: str = "asc", group: str = "") -> Tuple[int, List[Dict]]:
     conditions = []
     params = []
     if keyword:
@@ -154,11 +167,43 @@ def search_jobs(keyword: str = "", industry: str = "", company_size: str = "",
     if industry:
         conditions.append("job_category = ?")
         params.append(industry)
+    group_rule = GROUP_KEYWORDS.get(str(group or "").lower())
+    if group_rule:
+        group_conditions = []
+        industries = group_rule.get("industries") or []
+        if industries:
+            placeholders = ", ".join(["?"] * len(industries))
+            group_conditions.append(f"job_category IN ({placeholders})")
+            params.extend(industries)
+        title_keywords = group_rule.get("title_keywords") or []
+        keywords = group_rule.get("keywords") or []
+        if keywords:
+            keyword_parts = []
+            for item in title_keywords:
+                keyword_parts.append("job_title LIKE ?")
+                params.append(f"%{item}%")
+            for item in keywords:
+                keyword_parts.append("(job_title LIKE ? OR skills LIKE ?)")
+                params.extend([f"%{item}%"] * 2)
+            group_conditions.append("(" + " OR ".join(keyword_parts) + ")")
+        if group_conditions:
+            conditions.append("(" + " AND ".join(group_conditions) + ")")
     if company_size:
         conditions.append("company_size = ?")
         params.append(company_size)
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
     order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
+    order_clause = f"rowid {order_sql}"
+    if str(group or "").lower() == "data":
+        order_clause = f"""
+            CASE
+                WHEN job_title LIKE '%数据%' OR job_title LIKE '%分析%' OR job_title LIKE '%算法%'
+                  OR job_title LIKE '%机器学习%' OR job_title LIKE '%深度学习%' OR job_title LIKE '%BI%'
+                  OR job_title LIKE '%大数据%' THEN 0
+                ELSE 1
+            END ASC,
+            rowid {order_sql}
+        """
     offset = (page - 1) * size
 
     conn = get_db()
@@ -168,7 +213,7 @@ def search_jobs(keyword: str = "", industry: str = "", company_size: str = "",
             f"""
             SELECT {JOB_SELECT}
             FROM jobs {where_clause}
-            ORDER BY rowid {order_sql}
+            ORDER BY {order_clause}
             LIMIT ? OFFSET ?
             """,
             params + [size, offset],

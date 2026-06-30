@@ -150,6 +150,15 @@ def _create_business_tables(cursor):
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS captcha_challenges (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            used_at REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,

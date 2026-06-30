@@ -123,16 +123,21 @@ def rank_rows_with_word2vec(source_id: int, rows: Sequence) -> Optional[List[Tup
 def _load_skill_predictor(model_path: str, processor_path: str, label_path: str):
     if not all(os.path.exists(path) for path in [model_path, processor_path, label_path]):
         return None
-    from services.dl_models.skill_predictor_model import SkillPredictor
+    try:
+        from services.dl_models.skill_predictor_model import SkillPredictor
 
-    return SkillPredictor(model_path, processor_path, label_path)
+        return SkillPredictor(model_path, processor_path, label_path)
+    except Exception:
+        return None
 
 
 def predict_skills_with_textcnn(text: str, top_k: int = 5) -> Tuple[List[Dict], str]:
+    if os.getenv("ENABLE_TEXTCNN_SKILLS", "0") != "1":
+        return [], "rules"
+    predictor = _load_skill_predictor(*_textcnn_paths())
+    if predictor is None:
+        return [], "rules"
     try:
-        predictor = _load_skill_predictor(*_textcnn_paths())
-        if predictor is None:
-            return [], "rules"
         predictions = predictor.predict(text, top_k=top_k)
         return predictions, "textcnn"
     except Exception:

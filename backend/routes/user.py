@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import sqlite3
 import uuid
 
 from flask import Blueprint, jsonify, request
@@ -91,6 +92,7 @@ def get_user_profile():
 
     if student_row:
         profile.update({
+            "student_id": student_row["id"],
             "name": student_row["name"] or "",
             "realName": student_row["name"] or "",
             "gender": "",
@@ -112,6 +114,7 @@ def get_user_profile():
         })
     else:
         profile.update({
+            "student_id": None,
             "name": "",
             "realName": "",
             "gender": "",
@@ -165,8 +168,16 @@ def update_user_profile():
             params.append(student_id)
             conn.execute(f"UPDATE student SET {', '.join(fields)} WHERE id = ?", params)
         if "phone" in data:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE phone = ? AND id != ?",
+                (data["phone"], request.user["id"]),
+            ).fetchone()
+            if existing:
+                return jsonify({"error": "该手机号已被其他账号绑定"}), 409
             conn.execute("UPDATE users SET phone = ? WHERE id = ?", (data["phone"], request.user["id"]))
         conn.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "该手机号已被其他账号绑定"}), 409
     finally:
         conn.close()
     return jsonify({"status": "ok"})
@@ -233,8 +244,16 @@ def bind_phone():
         return jsonify({"error": "phone required"}), 400
     conn = get_db()
     try:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE phone = ? AND id != ?",
+            (phone, request.user["id"]),
+        ).fetchone()
+        if existing:
+            return jsonify({"error": "该手机号已被其他账号绑定"}), 409
         conn.execute("UPDATE users SET phone = ? WHERE id = ?", (phone, request.user["id"]))
         conn.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "该手机号已被其他账号绑定"}), 409
     finally:
         conn.close()
     return jsonify({"status": "ok"})

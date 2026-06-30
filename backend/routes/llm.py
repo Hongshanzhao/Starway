@@ -24,7 +24,7 @@ def test_connection():
         })
 
     try:
-        result = client.chat(probe, max_tokens=100)
+        result = client.test_remote(probe, max_tokens=100)
         return jsonify({
             "status": "ok",
             "provider": client.provider,

@@ -77,10 +77,133 @@ def list_users():
     conn = get_db()
     try:
         rows = conn.execute("SELECT id, username, phone, role, is_active, created_at FROM users").fetchall()
+        role_rows = conn.execute(
+            "SELECT role AS name, COUNT(*) AS value FROM users GROUP BY role ORDER BY value DESC"
+        ).fetchall()
+        status_rows = conn.execute(
+            """
+            SELECT CASE WHEN is_active = 1 THEN '启用' ELSE '停用' END AS name, COUNT(*) AS value
+            FROM users
+            GROUP BY is_active
+            ORDER BY is_active DESC
+            """
+        ).fetchall()
+        profile_rows = conn.execute(
+            """
+            SELECT profile_status AS name, COUNT(*) AS value
+            FROM (
+              SELECT u.id,
+                     CASE WHEN COUNT(s.id) = 0 THEN '未建画像' ELSE '已建画像' END AS profile_status
+              FROM users u
+              LEFT JOIN student s ON s.user_id = u.id
+              GROUP BY u.id
+            )
+            GROUP BY profile_status
+            """
+        ).fetchall()
+        recent_rows = conn.execute(
+            """
+            SELECT COALESCE(DATE(created_at), '未知日期') AS name, COUNT(*) AS value
+            FROM users
+            GROUP BY COALESCE(DATE(created_at), '未知日期')
+            ORDER BY name DESC
+            LIMIT 14
+            """
+        ).fetchall()
     finally:
         _close(conn)
     users = [dict(row) for row in rows]
-    return jsonify({"total": len(users), "users": users})
+    return jsonify({
+        "total": len(users),
+        "users": users,
+        "analytics": {
+            "roles": [dict(row) for row in role_rows],
+            "status": [dict(row) for row in status_rows],
+            "profiles": [dict(row) for row in profile_rows],
+            "recent": [dict(row) for row in recent_rows],
+        },
+    })
+
+
+@admin_bp.route("/dashboard", methods=["GET"])
+@admin_required
+def dashboard():
+    conn = get_db()
+    try:
+        totals = {
+            "users": conn.execute("SELECT COUNT(*) AS total FROM users").fetchone()["total"],
+            "students": conn.execute("SELECT COUNT(*) AS total FROM student").fetchone()["total"],
+            "jobs": conn.execute("SELECT COUNT(*) AS total FROM jobs").fetchone()["total"],
+            "reports": conn.execute("SELECT COUNT(*) AS total FROM report_history").fetchone()["total"],
+            "matches": conn.execute("SELECT COUNT(*) AS total FROM match_history").fetchone()["total"],
+            "assessments": conn.execute("SELECT COUNT(*) AS total FROM assessment_results").fetchone()["total"],
+        }
+        categories = conn.execute(
+            """
+            SELECT COALESCE(job_category, '未分类') AS name, COUNT(*) AS value
+            FROM jobs
+            GROUP BY COALESCE(job_category, '未分类')
+            ORDER BY value DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        report_jobs = conn.execute(
+            """
+            SELECT job_name AS name, COUNT(*) AS value
+            FROM report_history
+            GROUP BY job_name
+            ORDER BY value DESC
+            LIMIT 8
+            """
+        ).fetchall()
+        match_scores = conn.execute(
+            """
+            SELECT job_name, match_score, created_at
+            FROM match_history
+            ORDER BY created_at DESC
+            LIMIT 12
+            """
+        ).fetchall()
+        relations = conn.execute(
+            """
+            SELECT from_job, to_job, relation_type, description
+            FROM job_relations
+            ORDER BY id DESC
+            LIMIT 80
+            """
+        ).fetchall()
+        recent_reports = conn.execute(
+            """
+            SELECT id, student_id, job_name, created_at
+            FROM report_history
+            ORDER BY created_at DESC
+            LIMIT 6
+            """
+        ).fetchall()
+    finally:
+        _close(conn)
+
+    nodes = sorted({row["from_job"] for row in relations} | {row["to_job"] for row in relations})[:60]
+    return jsonify({
+        "totals": totals,
+        "categories": [dict(row) for row in categories],
+        "report_jobs": [dict(row) for row in report_jobs],
+        "match_scores": [dict(row) for row in match_scores],
+        "graph": {
+            "nodes": [{"name": name, "value": 1} for name in nodes],
+            "links": [
+                {
+                    "source": row["from_job"],
+                    "target": row["to_job"],
+                    "relation_type": row["relation_type"],
+                    "description": row["description"] or "",
+                }
+                for row in relations
+                if row["from_job"] in nodes and row["to_job"] in nodes
+            ],
+        },
+        "recent_reports": [dict(row) for row in recent_reports],
+    })
 
 
 @admin_bp.route("/users/<int:user_id>", methods=["GET"])
@@ -164,7 +287,6 @@ def get_category_summary():
         for index, row in enumerate(rows)
     ]
     return jsonify({
-        "source": "jobs.job_category",
         "total_categories": len(categories),
         "categories": categories,
     })
@@ -186,7 +308,63 @@ def delete_category(cid):
 @admin_required
 def get_all_jobs():
     rows = job_repository.all_jobs()
-    return jsonify({"list": [{**row, "category_name": row["industry"]} for row in rows]})
+    conn = get_db()
+    try:
+        industry_rows = conn.execute(
+            """
+            SELECT COALESCE(job_category, '未分类') AS name, COUNT(*) AS value
+            FROM jobs
+            GROUP BY COALESCE(job_category, '未分类')
+            ORDER BY value DESC
+            LIMIT 12
+            """
+        ).fetchall()
+        city_rows = conn.execute(
+            """
+            SELECT COALESCE(city, '未知城市') AS name, COUNT(*) AS value
+            FROM jobs
+            GROUP BY COALESCE(city, '未知城市')
+            ORDER BY value DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        salary_rows = conn.execute(
+            """
+            SELECT
+              CASE
+                WHEN salary_avg IS NULL OR salary_avg = 0 THEN '薪资未知'
+                WHEN salary_avg < 8000 THEN '8k以下'
+                WHEN salary_avg < 15000 THEN '8k-15k'
+                WHEN salary_avg < 25000 THEN '15k-25k'
+                ELSE '25k以上'
+              END AS name,
+              COUNT(*) AS value
+            FROM jobs
+            GROUP BY name
+            ORDER BY value DESC
+            """
+        ).fetchall()
+        quality_rows = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN skills IS NOT NULL AND TRIM(skills) != '' THEN 1 ELSE 0 END) AS has_skills,
+              SUM(CASE WHEN job_description IS NOT NULL AND LENGTH(TRIM(job_description)) > 30 THEN 1 ELSE 0 END) AS has_description,
+              SUM(CASE WHEN requirements IS NOT NULL AND LENGTH(TRIM(requirements)) > 20 THEN 1 ELSE 0 END) AS has_requirements,
+              COUNT(*) AS total
+            FROM jobs
+            """
+        ).fetchone()
+    finally:
+        _close(conn)
+    return jsonify({
+        "list": [{**row, "category_name": row["industry"]} for row in rows],
+        "analytics": {
+            "industries": [dict(row) for row in industry_rows],
+            "cities": [dict(row) for row in city_rows],
+            "salary": [dict(row) for row in salary_rows],
+            "quality": dict(quality_rows) if quality_rows else {},
+        },
+    })
 
 
 @admin_bp.route("/jobs", methods=["POST"])
@@ -311,14 +489,160 @@ def delete_job(jid):
 def build_job_graph():
     try:
         vertical_count, lateral_count = rebuild_job_graph()
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                """
+                SELECT from_job, to_job, relation_type, description
+                FROM job_relations
+                ORDER BY id DESC
+                LIMIT 60
+                """
+            ).fetchall()
+        finally:
+            _close(conn)
+        nodes = sorted({row["from_job"] for row in rows} | {row["to_job"] for row in rows})
         return jsonify({
             "success": True,
-            "message": f"岗位关系图谱重建完成，新增垂直路径 {vertical_count} 条，横向路径 {lateral_count} 条",
+            "message": f"岗位关系已更新：新增晋升路线 {vertical_count} 条，换岗路线 {lateral_count} 条。前台成长路径、相似岗位和换岗建议会使用这些关系。",
             "vertical_count": vertical_count,
             "lateral_count": lateral_count,
+            "graph": {
+                "nodes": [{"name": name, "value": 1} for name in nodes],
+                "links": [
+                    {
+                        "source": row["from_job"],
+                        "target": row["to_job"],
+                        "relation_type": row["relation_type"],
+                        "description": row["description"] or "",
+                    }
+                    for row in rows
+                ],
+            },
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@admin_bp.route("/graph/overview", methods=["GET"])
+@admin_required
+def graph_overview():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT from_job, to_job, relation_type, description
+            FROM job_relations
+            ORDER BY id DESC
+            LIMIT 180
+            """
+        ).fetchall()
+        relation_rows = conn.execute(
+            """
+            SELECT
+              CASE
+                WHEN relation_type = 'promotion' THEN '晋升路线'
+                WHEN relation_type = 'transition' THEN '换岗路线'
+                ELSE '其他关系'
+              END AS name,
+              COUNT(*) AS value
+            FROM job_relations
+            GROUP BY name
+            ORDER BY value DESC
+            """
+        ).fetchall()
+        isolated_count = conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM jobs j
+            WHERE NOT EXISTS (
+              SELECT 1 FROM job_relations r
+              WHERE r.from_job = j.job_title OR r.to_job = j.job_title
+            )
+            """
+        ).fetchone()["total"]
+        total_jobs = conn.execute("SELECT COUNT(*) AS total FROM jobs").fetchone()["total"]
+    finally:
+        _close(conn)
+
+    nodes = sorted({row["from_job"] for row in rows} | {row["to_job"] for row in rows})
+    coverage = round(((total_jobs - isolated_count) / total_jobs) * 100, 1) if total_jobs else 0
+    return jsonify({
+        "total_jobs": total_jobs,
+        "isolated_jobs": isolated_count,
+        "coverage": coverage,
+        "relation_types": [dict(row) for row in relation_rows],
+        "graph": {
+            "nodes": [{"name": name, "value": 1} for name in nodes],
+            "links": [
+                {
+                    "source": row["from_job"],
+                    "target": row["to_job"],
+                    "relation_type": row["relation_type"],
+                    "description": row["description"] or "",
+                }
+                for row in rows
+            ],
+        },
+    })
+
+
+@admin_bp.route("/ai-tools/overview", methods=["GET"])
+@admin_required
+def ai_tools_overview():
+    conn = get_db()
+    try:
+        totals = {
+            "reports": conn.execute("SELECT COUNT(*) AS total FROM report_history").fetchone()["total"],
+            "matches": conn.execute("SELECT COUNT(*) AS total FROM match_history").fetchone()["total"],
+            "assessments": conn.execute("SELECT COUNT(*) AS total FROM assessment_results").fetchone()["total"],
+            "profiles": conn.execute("SELECT COUNT(*) AS total FROM student").fetchone()["total"],
+        }
+        ai_rows = conn.execute(
+            """
+            SELECT '职业报告' AS name, COUNT(*) AS value FROM report_history
+            UNION ALL
+            SELECT '人岗匹配' AS name, COUNT(*) AS value FROM match_history
+            UNION ALL
+            SELECT '兴趣测评' AS name, COUNT(*) AS value FROM assessment_results
+            """
+        ).fetchall()
+        report_rows = conn.execute(
+            """
+            SELECT COALESCE(job_name, '未知方向') AS name, COUNT(*) AS value
+            FROM report_history
+            GROUP BY COALESCE(job_name, '未知方向')
+            ORDER BY value DESC
+            LIMIT 8
+            """
+        ).fetchall()
+        quality = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN LENGTH(COALESCE(content, '')) >= 800 THEN 1 ELSE 0 END) AS useful_reports,
+              COUNT(*) AS total_reports
+            FROM report_history
+            """
+        ).fetchone()
+    finally:
+        _close(conn)
+    total_reports = quality["total_reports"] if quality else 0
+    useful_reports = quality["useful_reports"] if quality else 0
+    return jsonify({
+        "totals": totals,
+        "ai_outputs": [dict(row) for row in ai_rows],
+        "report_jobs": [dict(row) for row in report_rows],
+        "quality": {
+            "useful_reports": useful_reports or 0,
+            "total_reports": total_reports or 0,
+            "report_quality_rate": round(((useful_reports or 0) / total_reports) * 100, 1) if total_reports else 0,
+        },
+        "tasks": [
+            {"name": "刷新岗位关系图谱", "impact": "提升成长路径、相似岗位、换岗建议的连贯性", "action": "build_graph"},
+            {"name": "检查报告质量", "impact": "发现过短、信息不足或不适合直接导出的报告", "action": "review_reports"},
+            {"name": "补齐岗位画像", "impact": "让岗位画像和匹配指标不再空洞", "action": "review_jobs"},
+        ],
+    })
 
 
 @admin_bp.route("/reports", methods=["GET"])
@@ -350,10 +674,51 @@ def list_reports():
             """,
             params + [size, offset],
         ).fetchall()
+        job_rows = conn.execute(
+            """
+            SELECT COALESCE(job_name, '未知方向') AS name, COUNT(*) AS value
+            FROM report_history
+            GROUP BY COALESCE(job_name, '未知方向')
+            ORDER BY value DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        day_rows = conn.execute(
+            """
+            SELECT COALESCE(DATE(created_at, 'unixepoch'), '未知日期') AS name, COUNT(*) AS value
+            FROM report_history
+            GROUP BY COALESCE(DATE(created_at, 'unixepoch'), '未知日期')
+            ORDER BY name DESC
+            LIMIT 14
+            """
+        ).fetchall()
+        length_rows = conn.execute(
+            """
+            SELECT
+              CASE
+                WHEN LENGTH(COALESCE(content, '')) < 500 THEN '偏短'
+                WHEN LENGTH(COALESCE(content, '')) < 1500 THEN '适中'
+                ELSE '详细'
+              END AS name,
+              COUNT(*) AS value
+            FROM report_history
+            GROUP BY name
+            """
+        ).fetchall()
     finally:
         _close(conn)
 
-    return jsonify({"total": total, "page": page, "size": size, "items": [dict(row) for row in rows]})
+    return jsonify({
+        "total": total,
+        "page": page,
+        "size": size,
+        "items": [dict(row) for row in rows],
+        "analytics": {
+            "jobs": [dict(row) for row in job_rows],
+            "daily": [dict(row) for row in day_rows],
+            "length": [dict(row) for row in length_rows],
+        },
+    })
 
 
 @admin_bp.route("/reports/<int:report_id>", methods=["GET"])

@@ -2,10 +2,11 @@ import json
 import re
 from functools import lru_cache
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from db import get_db
 from services import job_ml_service, job_repository
+from services.career_ai_service import call_llm, call_llm_stream
 from services.ml_recommender import build_job_profile as build_ml_job_profile
 from services.skill_normalizer import concepts_from_skills, display_concepts, match_concepts
 
@@ -349,12 +350,14 @@ def search_jobs():
     size = max(1, request.args.get("size", 10, type=int))
     keyword = request.args.get("keyword", "", type=str)
     industry = request.args.get("industry", "", type=str)
+    group = request.args.get("group", "", type=str)
     company_size = request.args.get("company_size", "", type=str)
     order = request.args.get("order", "asc", type=str)
 
     total, rows = job_repository.search_jobs(
         keyword=keyword,
         industry=industry,
+        group=group,
         company_size=company_size,
         page=page,
         size=size,
@@ -421,6 +424,118 @@ def get_job_profile(job_id):
     finally:
         conn.close()
     return jsonify(profile)
+
+
+def _extract_json_object(text, default):
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start:end + 1])
+    except Exception:
+        pass
+    return default
+
+
+def _ai_job_profile_prompt(job, profile):
+    return f"""
+你是 Starway 职业规划平台的岗位研究 AI。请基于真实岗位数据，生成面向大学生的岗位画像。
+只返回 JSON，不要 Markdown，不要解释。
+
+岗位数据：{json.dumps(job, ensure_ascii=False)}
+规则画像：{json.dumps(profile, ensure_ascii=False)}
+
+JSON 字段：
+summary：120 字以内，说明这个岗位到底做什么；
+work_scenarios：数组，3-5 个真实工作场景；
+skill_groups：数组，每项包含 title、reason、skills，分为入门必须会、作品加分项、进阶能力；
+preparation_steps：数组，4-6 条准备优先级；
+evidence：数组，每项包含 title、text，说明简历/作品/面试证据；
+interview_questions：数组，5 个面试问题；
+risk_tips：数组，3-5 条常见误区。
+"""
+
+
+@job_bp.route("/<int:job_id>/profile-ai", methods=["GET"])
+def get_job_profile_ai(job_id):
+    job = job_repository.get_job_by_rowid(job_id)
+    if not job:
+        return jsonify({"error": "岗位不存在"}), 404
+    base_profile = build_ml_job_profile(job)
+    prompt = _ai_job_profile_prompt(job, base_profile)
+    default = _rule_job_profile_ai(job, base_profile)
+    try:
+        data = _extract_json_object(call_llm(prompt, temperature=0.45, max_tokens=1800), default)
+    except Exception:
+        data = default
+    return jsonify({**default, **data, "job_name": job.get("job_name") or job.get("job_title"), "base_profile": base_profile})
+
+
+@job_bp.route("/<int:job_id>/profile-ai-stream", methods=["GET"])
+def get_job_profile_ai_stream(job_id):
+    job = job_repository.get_job_by_rowid(job_id)
+    if not job:
+        return jsonify({"error": "岗位不存在"}), 404
+    base_profile = build_ml_job_profile(job)
+    prompt = _ai_job_profile_prompt(job, base_profile)
+    default = _rule_job_profile_ai(job, base_profile)
+
+    def generate():
+        chunks = []
+        try:
+            for chunk in call_llm_stream(prompt, temperature=0.45, max_tokens=1800):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+        except Exception:
+            chunks = []
+        data = _extract_json_object("".join(chunks), default)
+        yield f"data: {json.dumps({'done': True, 'data': {**default, **data, 'job_name': job.get('job_name') or job.get('job_title'), 'base_profile': base_profile}}, ensure_ascii=False)}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+def _rule_job_profile_ai(job, profile):
+    job_name = job.get("job_name") or job.get("job_title") or "目标岗位"
+    skills = list(profile.get("skills") or [])[:10]
+    return {
+        "summary": f"{job_name}需要围绕真实岗位职责建立技能、项目证据、沟通协作和复盘能力，准备时应优先对照真实 JD 拆解任务。",
+        "work_scenarios": [
+            "阅读岗位需求并拆解任务边界",
+            "选择合适工具完成核心交付",
+            "和上下游角色同步风险、进度和结果",
+            "根据反馈复盘并迭代方案",
+        ],
+        "skill_groups": [
+            {"title": "入门必须会", "reason": "先满足 JD 高频要求", "skills": skills[:5]},
+            {"title": "作品加分项", "reason": "用项目证明能交付", "skills": skills[5:8]},
+            {"title": "进阶能力", "reason": "体现问题拆解和复盘能力", "skills": skills[8:]},
+        ],
+        "preparation_steps": [
+            f"收集 15 条 {job_name} JD，统计重复出现的技能和职责。",
+            "选择 2 到 3 个关键技能做一个岗位作品。",
+            "把作品写成问题、方案、工具、结果、复盘结构。",
+            "准备 5 个面试故事，覆盖问题定位、协作推进、失败复盘、学习突破和结果验证。",
+        ],
+        "evidence": [
+            {"title": "简历证据", "text": "至少准备 3 条直接相关经历，每条写清动作、工具和结果。"},
+            {"title": "作品证据", "text": "准备作品链接、文档、截图、数据或部署记录。"},
+            {"title": "面试证据", "text": "准备 3 分钟项目讲述稿，重点讲判断、取舍和结果。"},
+        ],
+        "interview_questions": [
+            "你如何理解这个岗位的核心产出？",
+            "你做过哪个项目最能证明岗位能力？",
+            "遇到问题时你如何定位原因？",
+            "你如何和其他角色协作推进？",
+            "如果结果不理想，你会怎么复盘？",
+        ],
+        "risk_tips": [
+            "不要只列技术名词，要证明使用场景。",
+            "不要把课程学习当成作品，需要有结果证据。",
+            "不要忽略复盘，面试会追问你的判断过程。",
+        ],
+    }
 
 
 def _career_path(job_name):
@@ -920,6 +1035,134 @@ def get_full_career_path(job_name):
         "lateral_paths": lateral_paths,
         "model_source": model_source,
     })
+
+
+def _ai_path_prompt(job_name, student, vertical_path, lateral_paths):
+    return f"""
+你是 Starway 职业路径规划 AI。请基于岗位、学生画像和已有路径数据，生成结构化职业路径。
+只返回 JSON，不要 Markdown。
+
+目标岗位：{job_name}
+学生画像：{json.dumps(student or {}, ensure_ascii=False)}
+纵向路径数据：{json.dumps(vertical_path, ensure_ascii=False)}
+横向迁移数据：{json.dumps(lateral_paths, ensure_ascii=False)}
+
+JSON 字段：
+summary：120 字以内；
+vertical_stages：数组，3-5 项，每项 title、description、outputs、checkpoints；
+lateral_cards：数组，3 项，每项 job_name、reason、transferable_skills、missing_skills、first_action；
+action_plan：数组，3 项，每项 title、text、output；
+risk_list：数组，4 条；
+learning_focus：数组，4-6 条。
+要求必须结合目标岗位名称和学生已有能力，不要输出通用模板。
+"""
+
+
+@job_bp.route("/<job_name>/full-path-ai", methods=["GET"])
+def get_full_career_path_ai(job_name):
+    normalized = job_repository.normalize_job_name(job_name)
+    student = _load_student_profile(request.args.get("student_id", type=int))
+    vertical_path, vertical_source = _career_path(normalized)
+    lateral_paths, lateral_source = _lateral_paths(normalized, student=student)
+    if student:
+        source = job_repository.get_job_by_name(normalized)
+        vertical_path = _personalize_vertical_path(source, vertical_path, student, vertical_source)
+    default = _rule_path_ai(normalized, student, vertical_path, lateral_paths)
+    try:
+        data = _extract_json_object(call_llm(_ai_path_prompt(normalized, student, vertical_path, lateral_paths), temperature=0.48, max_tokens=2200), default)
+    except Exception:
+        data = default
+    return jsonify({
+        "success": True,
+        "job_name": normalized,
+        "student_id": student["id"] if student else None,
+        "vertical_path": vertical_path,
+        "lateral_paths": lateral_paths,
+        **default,
+        **data,
+        "model_source": "ai" if data != default else ("word2vec" if "word2vec" in {vertical_source, lateral_source} else "rules"),
+    })
+
+
+@job_bp.route("/<job_name>/full-path-ai-stream", methods=["GET"])
+def get_full_career_path_ai_stream(job_name):
+    normalized = job_repository.normalize_job_name(job_name)
+    student = _load_student_profile(request.args.get("student_id", type=int))
+    vertical_path, vertical_source = _career_path(normalized)
+    lateral_paths, lateral_source = _lateral_paths(normalized, student=student)
+    if student:
+        source = job_repository.get_job_by_name(normalized)
+        vertical_path = _personalize_vertical_path(source, vertical_path, student, vertical_source)
+    default = _rule_path_ai(normalized, student, vertical_path, lateral_paths)
+    prompt = _ai_path_prompt(normalized, student, vertical_path, lateral_paths)
+
+    def generate():
+        chunks = []
+        try:
+            for chunk in call_llm_stream(prompt, temperature=0.48, max_tokens=2200):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+        except Exception:
+            chunks = []
+        data = _extract_json_object("".join(chunks), default)
+        yield f"data: {json.dumps({'done': True, 'data': {'success': True, 'job_name': normalized, 'student_id': student['id'] if student else None, 'vertical_path': vertical_path, 'lateral_paths': lateral_paths, **default, **data}}, ensure_ascii=False)}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+def _rule_path_ai(job_name, student, vertical_path, lateral_paths):
+    student_skills = _display_skills(student.get("skills") if student else [])[:5]
+    skill_text = "、".join(student_skills) if student_skills else "当前画像技能较少"
+    return {
+        "summary": f"{job_name} 的路径应从岗位拆解、作品验证、投递复盘三步推进。当前可参考的能力基础是：{skill_text}。",
+        "vertical_stages": [
+            {
+                "title": f"{job_name} 入门准备",
+                "description": "理解真实 JD，确认高频技能、工作任务和交付物。",
+                "outputs": ["JD 拆解表", "技能优先级", "学习笔记"],
+                "checkpoints": ["能解释岗位产出", "能完成基础练习"],
+            },
+            *[
+                {
+                    "title": f"{item.get('from_job', job_name)} → {item.get('to_job', '进阶方向')}",
+                    "description": item.get("description") or item.get("why_next") or "把基础执行转化为稳定交付。",
+                    "outputs": (item.get("learning_plan") or ["阶段作品", "简历条目"])[:3],
+                    "checkpoints": (item.get("transferable_skills") or ["能说明迁移能力"])[:3],
+                }
+                for item in (vertical_path or [])[:2]
+            ],
+            {
+                "title": f"{job_name} 独立胜任",
+                "description": "用完整作品或真实经历证明自己能独立完成关键任务。",
+                "outputs": ["作品集", "面试讲稿", "投递复盘表"],
+                "checkpoints": ["能讲清问题和方案", "能用结果证明价值"],
+            },
+        ],
+        "lateral_cards": [
+            {
+                "job_name": item.get("job_name") or item.get("to_job"),
+                "reason": item.get("description") or item.get("why_recommended"),
+                "transferable_skills": item.get("transferable_skills") or [],
+                "missing_skills": item.get("missing_skills") or [],
+                "first_action": "搜索真实 JD，对比技能重合和缺口。",
+            }
+            for item in (lateral_paths or [])[:3]
+        ],
+        "action_plan": [
+            {"title": "0-30 天：拆岗位", "text": f"收集 20 条 {job_name} JD，标出共同技能、职责、工具和产出物。", "output": "岗位能力清单 + 个人差距清单"},
+            {"title": "31-60 天：做作品", "text": f"围绕 {job_name} 做一个可展示项目或案例。", "output": "作品链接/文档 + 简历描述"},
+            {"title": "61-90 天：投递复盘", "text": "小批量投递，每周复盘回复率、面试问题和技能卡点。", "output": "投递记录表 + 面试题复盘"},
+        ],
+        "risk_list": [
+            "只收藏课程但没有作品，每学一个技能都要配一个可展示输出。",
+            "简历只写熟悉/了解，改成用什么方法在什么场景解决什么问题。",
+            "横向迁移跨度过大，至少保留技能、行业或工作方式中的一项相邻。",
+            "投递后不复盘，无法判断是关键词、项目深度还是表达问题。",
+        ],
+        "learning_focus": ["岗位 JD 拆解", "关键技能练习", "项目作品", "简历表达", "模拟面试"],
+    }
 
 
 @job_bp.route("/<job_name>/vertical", methods=["GET"])

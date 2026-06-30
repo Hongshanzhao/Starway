@@ -33,6 +33,9 @@ CORS(
                 "http://localhost:3000",
                 "http://localhost:3001",
                 "http://localhost:3002",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:3001",
+                "http://127.0.0.1:3002",
             ],
             "supports_credentials": True,
         }
@@ -49,7 +52,12 @@ register_blueprints(app)
 
 @app.route("/")
 def home():
-    return jsonify({"message": "Starway backend is running", "database": "SQLite"})
+    return jsonify({
+        "message": "Starway backend is running",
+        "database": "SQLite",
+        "build": "starway-frontend-polish-20260630",
+        "app_file": __file__,
+    })
 
 
 @app.route("/test-db")

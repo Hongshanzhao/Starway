@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import tempfile
+import unicodedata
 
 from flask import Blueprint, jsonify, request
 from werkzeug.utils import secure_filename
@@ -45,17 +47,31 @@ def ensure_required_soft_abilities(soft_abilities):
 def _rule_extract_profile(text, data=None):
     data = data or {}
     skills = split_skills(data.get("skills_certs") or data.get("skills") or "")
-    skills += [s for s in ["Python", "Java", "SQL", "Vue", "React", "Flask", "Docker"] if s.lower() in text.lower()]
+    skill_pool = [
+        "Python", "Java", "SQL", "Vue", "React", "Flask", "Django", "Docker",
+        "ECharts", "Pandas", "NumPy", "Excel", "Tableau", "Power BI",
+        "机器学习", "深度学习", "数据分析", "数据清洗", "可视化", "产品设计",
+        "软件测试", "单元测试", "测试用例", "缺陷跟踪", "JMeter", "Postman",
+        "测试工程师",
+    ]
+    skills += [s for s in skill_pool if s.lower() in text.lower()]
     skills = list(dict.fromkeys(skills))
     certs = [item for item in split_skills(data.get("skills_certs") or "") if "证" in item or "PMP" in item.upper()]
     education = data.get("education", "")
     work = data.get("work", "")
     project = data.get("project", "")
+    sections = _split_resume_sections(text)
+    if not education:
+        education = sections.get("education", "")
+    if not work:
+        work = sections.get("work", "")
+    if not project:
+        project = sections.get("project", "")
     return {
         "skills": skills,
         "certificates": certs,
         "soft_abilities": ensure_required_soft_abilities({}),
-        "education": _parse_education(education),
+        "education": _parse_education(f"{education}\n{text}"),
         "work_experience": _parse_list_text(work, ["company", "position", "description"]),
         "project_experience": _parse_list_text(project, ["project_name", "role", "description"]),
     }
@@ -69,17 +85,66 @@ def _parse_education(text):
         if item in text:
             degree = item
             break
-    return {"school": text[:30], "major": "", "degree": degree}
+    major = ""
+    for item in ["软件工程", "计算机科学与技术", "计算机", "数据科学", "人工智能", "信息管理", "电子商务", "市场营销"]:
+        if item in text:
+            major = item
+            break
+    grade = ""
+    for item in ["大一", "大二", "大三", "大四", "研一", "研二", "研三", "应届"]:
+        if item in text:
+            grade = item
+            break
+    return {"school": text[:30], "major": major, "degree": degree, "grade": grade}
 
 
 def _parse_list_text(text, keys):
     if not text:
         return []
-    item = {keys[0]: text[:30], keys[1]: "", keys[2]: text}
-    return [item]
+    lines = [line.strip(" -·\t") for line in str(text).splitlines() if line.strip()]
+    if not lines:
+        return []
+    items = []
+    for line in lines[:4]:
+        if "：" in line:
+            title, desc = line.split("：", 1)
+        elif ":" in line:
+            title, desc = line.split(":", 1)
+        else:
+            title, desc = line[:30], line
+        items.append({keys[0]: title[:30], keys[1]: "", keys[2]: desc.strip() or line})
+    return items
+
+
+def _split_resume_sections(text):
+    sections = {"education": "", "work": "", "project": "", "skills": ""}
+    current = ""
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        normalized = line.replace("：", ":")
+        key = ""
+        if any(word in line for word in ["教育", "学历", "本科", "硕士", "博士", "专业"]):
+            key = "education"
+        if any(word in line for word in ["实习", "工作", "经历"]):
+            key = "work"
+        if any(word in line for word in ["项目", "作品"]):
+            key = "project"
+        if any(word in line for word in ["技能", "证书"]):
+            key = "skills"
+        current = key or current
+        if current:
+            value = normalized.split(":", 1)[1].strip() if ":" in normalized else line
+            sections[current] = (sections[current] + "\n" + value).strip()
+    return sections
 
 
 def _extract_with_llm(text, data=None):
+    if not text or len(str(text).strip()) < 8:
+        return _rule_extract_profile(text, data)
+    if not _should_enhance_with_ai():
+        return _rule_extract_profile(text, data)
     prompt = f"""
 请从以下大学生简历/档案文本中抽取结构化 JSON：
 字段：skills, certificates, soft_abilities, education, work_experience, project_experience。
@@ -99,6 +164,10 @@ def _extract_with_llm(text, data=None):
     except Exception:
         pass
     return _rule_extract_profile(text, data)
+
+
+def _should_enhance_with_ai():
+    return request.args.get("ai") == "1" if request else False
 
 
 def _education_dict(value):
@@ -171,53 +240,119 @@ def submit_profile():
 
 @profile_bp.route("/upload", methods=["POST"])
 def upload_resume():
-    if "file" not in request.files:
-        return jsonify({"error": "缺少文件"}), 400
-    file = request.files["file"]
-    if not file.filename or not allowed_file(file.filename):
-        return jsonify({"error": "不支持的文件类型"}), 400
-    filename = secure_filename(file.filename)
-    suffix = filename.rsplit(".", 1)[1].lower()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
-        file.save(tmp.name)
-        temp_path = tmp.name
+    temp_path = ""
+    suffix = ""
     try:
-        text = _read_resume_text(temp_path, suffix)
+        if "file" not in request.files:
+            return jsonify({"error": "缺少文件"}), 400
+        file = request.files["file"]
+        if not file.filename or not allowed_file(file.filename):
+            return jsonify({"error": "不支持的文件类型"}), 400
+        suffix = file.filename.rsplit(".", 1)[1].lower()
+        filename = secure_filename(file.filename) or f"resume.{suffix}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
+            file.save(tmp.name)
+            temp_path = tmp.name
+        text, parse_warning = _read_resume_text(temp_path, suffix)
+        ability = _extract_with_llm(text)
+        return jsonify({
+            "text": text,
+            "parse_warning": parse_warning,
+            "skills": ability.get("skills", []),
+            "certificates": ability.get("certificates", []),
+            "soft_abilities": ability.get("soft_abilities", {}),
+            "education_json": ability.get("education", {}),
+            "work_json": ability.get("work_experience", []),
+            "project_json": ability.get("project_experience", []),
+        })
+    except Exception as exc:
+        return jsonify({
+            "text": "",
+            "parse_warning": _friendly_parse_warning(suffix),
+            "skills": [],
+            "certificates": [],
+            "soft_abilities": ensure_required_soft_abilities({}),
+            "education_json": {},
+            "work_json": [],
+            "project_json": [],
+        }), 200
     finally:
         try:
-            os.remove(temp_path)
+            if temp_path:
+                os.remove(temp_path)
         except OSError:
             pass
-    ability = _extract_with_llm(text)
-    return jsonify({
-        "text": text,
-        "skills": ability.get("skills", []),
-        "certificates": ability.get("certificates", []),
-        "soft_abilities": ability.get("soft_abilities", {}),
-        "education_json": ability.get("education", {}),
-        "work_json": ability.get("work_experience", []),
-        "project_json": ability.get("project_experience", []),
-    })
 
 
 def _read_resume_text(path, suffix):
     if suffix in {"txt", "md"}:
-        return open(path, "r", encoding="utf-8", errors="ignore").read()
+        return open(path, "r", encoding="utf-8", errors="ignore").read(), ""
     if suffix == "pdf":
-        try:
-            import pdfplumber
-            with pdfplumber.open(path) as pdf:
-                return "\n".join(page.extract_text() or "" for page in pdf.pages)
-        except Exception as exc:
-            raise RuntimeError(f"PDF 解析失败: {exc}")
+        errors = []
+        text = ""
+        for reader in (_read_pdf_with_pypdfium2, _read_pdf_with_pdfplumber, _read_pdf_with_pdfminer):
+            try:
+                text = reader(path)
+                if text.strip():
+                    return _clean_resume_text(text), ""
+            except Exception as exc:
+                errors.append(str(exc))
+        return "", _friendly_parse_warning("pdf")
     if suffix in {"doc", "docx"}:
         try:
             from docx import Document
             doc = Document(path)
-            return "\n".join(p.text for p in doc.paragraphs)
+            return "\n".join(p.text for p in doc.paragraphs), ""
         except Exception as exc:
-            raise RuntimeError(f"Word 解析失败: {exc}")
-    return ""
+            return "", _friendly_parse_warning("docx")
+    return "", ""
+
+
+def _friendly_parse_warning(suffix):
+    if suffix == "pdf":
+        return "PDF 没有抽取到可用文本，可能是扫描件、加密文件或排版过于复杂。请换成 DOCX/TXT，或复制简历内容到手动填写。"
+    if suffix in {"doc", "docx"}:
+        return "Word 文档没有抽取到可用文本。请另存为 DOCX/TXT，或复制简历内容到手动填写。"
+    return "简历解析没有完成。请换成 DOCX/TXT，或复制简历内容到手动填写。"
+
+
+def _read_pdf_with_pypdfium2(path):
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(path)
+    chunks = []
+    try:
+        for index in range(len(pdf)):
+            page = pdf[index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    chunks.append(text_page.get_text_range() or "")
+                finally:
+                    text_page.close()
+            finally:
+                page.close()
+    finally:
+        pdf.close()
+    return "\n".join(chunks)
+
+
+def _read_pdf_with_pdfplumber(path):
+    import pdfplumber
+    with pdfplumber.open(path) as pdf:
+        return "\n".join(page.extract_text() or "" for page in pdf.pages)
+
+
+def _read_pdf_with_pdfminer(path):
+    from pdfminer.high_level import extract_text
+    return extract_text(path) or ""
+
+
+def _clean_resume_text(text):
+    text = unicodedata.normalize("NFKC", str(text or ""))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 @profile_bp.route("/<int:student_id>", methods=["GET"])
