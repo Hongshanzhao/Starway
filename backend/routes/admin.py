@@ -307,7 +307,21 @@ def delete_category(cid):
 @admin_bp.route("/jobs", methods=["GET"])
 @admin_required
 def get_all_jobs():
-    rows = job_repository.all_jobs()
+    page = request.args.get("page", 1, type=int)
+    size = request.args.get("size", 20, type=int)
+    keyword = request.args.get("keyword", "", type=str)
+    industry = request.args.get("industry", "", type=str)
+    city = request.args.get("city", "", type=str)
+    if page < 1 or size < 1:
+        return jsonify({"error": "pagination parameters invalid"}), 400
+    size = min(size, 100)
+    total, rows = job_repository.admin_list_jobs(
+        keyword=keyword,
+        industry=industry,
+        city=city,
+        page=page,
+        size=size,
+    )
     conn = get_db()
     try:
         industry_rows = conn.execute(
@@ -354,15 +368,28 @@ def get_all_jobs():
             FROM jobs
             """
         ).fetchone()
+        summary_rows = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total_jobs,
+              COUNT(DISTINCT NULLIF(job_category, '')) AS industry_count,
+              COUNT(DISTINCT NULLIF(city, '')) AS city_count
+            FROM jobs
+            """
+        ).fetchone()
     finally:
         _close(conn)
     return jsonify({
         "list": [{**row, "category_name": row["industry"]} for row in rows],
+        "total": total,
+        "page": page,
+        "size": size,
         "analytics": {
             "industries": [dict(row) for row in industry_rows],
             "cities": [dict(row) for row in city_rows],
             "salary": [dict(row) for row in salary_rows],
             "quality": dict(quality_rows) if quality_rows else {},
+            "summary": dict(summary_rows) if summary_rows else {},
         },
     })
 

@@ -302,7 +302,6 @@ def get_categories():
             "description": f"{row['name']}类岗位，共 {row['job_count']} 个",
             "job_count": row["job_count"],
             "skills": [],
-            "certificates": [],
             "soft_abilities": {},
         }
         for index, row in enumerate(rows)
@@ -401,7 +400,6 @@ def get_job_profile(job_id):
                 "job_id": job["job_code"],
                 "job_name": job["job_name"],
                 "skills": _json_loads(existing["skills"], []),
-                "certificates": _json_loads(existing["certificates"], []),
                 "soft_abilities": _json_loads(existing["soft_abilities"], {}),
                 "category": job["job_category"] or job["industry"] or "",
                 "source": "job_profile",
@@ -416,7 +414,7 @@ def get_job_profile(job_id):
                 (
                     profile["job_name"],
                     json.dumps(profile["skills"], ensure_ascii=False),
-                    json.dumps(profile["certificates"], ensure_ascii=False),
+                    json.dumps([], ensure_ascii=False),
                     json.dumps(profile["soft_abilities"], ensure_ascii=False),
                 ),
             )
@@ -483,7 +481,7 @@ def get_job_profile_ai_stream(job_id):
     def generate():
         chunks = []
         try:
-            for chunk in call_llm_stream(prompt, temperature=0.45, max_tokens=1800):
+            for chunk in call_llm_stream(prompt, temperature=0.35, max_tokens=900):
                 if not chunk:
                     continue
                 chunks.append(chunk)
@@ -1040,7 +1038,7 @@ def get_full_career_path(job_name):
 def _ai_path_prompt(job_name, student, vertical_path, lateral_paths):
     return f"""
 你是 Starway 职业路径规划 AI。请基于岗位、学生画像和已有路径数据，生成结构化职业路径。
-只返回 JSON，不要 Markdown。
+只返回 JSON，不要 Markdown，不要输出 *、**、#、``` 等符号。
 
 目标岗位：{job_name}
 学生画像：{json.dumps(student or {}, ensure_ascii=False)}
@@ -1048,14 +1046,25 @@ def _ai_path_prompt(job_name, student, vertical_path, lateral_paths):
 横向迁移数据：{json.dumps(lateral_paths, ensure_ascii=False)}
 
 JSON 字段：
-summary：120 字以内；
-vertical_stages：数组，3-5 项，每项 title、description、outputs、checkpoints；
+summary：120 字以内，说明这个岗位为什么适合或哪里需要补；
+vertical_stages：数组，3-5 项，每项 title、description、outputs、checkpoints；其中 outputs 和 checkpoints 必须是中文字符串数组，不能是单个字符串；
 lateral_cards：数组，3 项，每项 job_name、reason、transferable_skills、missing_skills、first_action；
-action_plan：数组，3 项，每项 title、text、output；
-risk_list：数组，4 条；
+action_plan：数组，严格 3 项，分别对应 0-30 天、31-60 天、61-90 天，每项 title、text、output；
+risk_list：数组，严格 4 项，每项是对象，必须包含 risk、description、mitigation 三个字段；
 learning_focus：数组，4-6 条。
-要求必须结合目标岗位名称和学生已有能力，不要输出通用模板。
+
+生成要求：
+1. 必须结合目标岗位名称「{job_name}」和学生已有能力、缺失经历或技能，不要输出通用模板。
+2. action_plan 不能只写“拆岗位、做作品、投递复盘”，要写清具体技能、作品形式、验收标准和简历表达。
+3. risk_list 不能写泛泛风险，必须说明为什么这个学生在该岗位上可能踩坑，以及如何规避。
+4. 全文使用第二人称“你/你的”，不要使用“您/您的”。
 """
+
+
+def _clean_stream_json_chunk(value):
+    text = str(value or "")
+    text = text.replace("```json", "").replace("```JSON", "").replace("```", "").replace("**", "").replace("*", "")
+    return "" if text.strip().lower() == "json" else text
 
 
 @job_bp.route("/<job_name>/full-path-ai", methods=["GET"])
@@ -1099,15 +1108,28 @@ def get_full_career_path_ai_stream(job_name):
     def generate():
         chunks = []
         try:
-            for chunk in call_llm_stream(prompt, temperature=0.48, max_tokens=2200):
+            for chunk in call_llm_stream(prompt, temperature=0.38, max_tokens=1000):
                 if not chunk:
                     continue
                 chunks.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                visible_chunk = _clean_stream_json_chunk(chunk)
+                if visible_chunk:
+                    yield f"data: {json.dumps({'chunk': visible_chunk}, ensure_ascii=False)}\n\n"
         except Exception:
             chunks = []
         data = _extract_json_object("".join(chunks), default)
-        yield f"data: {json.dumps({'done': True, 'data': {'success': True, 'job_name': normalized, 'student_id': student['id'] if student else None, 'vertical_path': vertical_path, 'lateral_paths': lateral_paths, **default, **data}}, ensure_ascii=False)}\n\n"
+        model_source = "ai" if data != default else ("word2vec" if "word2vec" in {vertical_source, lateral_source} else "rules")
+        payload = {
+            "success": True,
+            "job_name": normalized,
+            "student_id": student["id"] if student else None,
+            "vertical_path": vertical_path,
+            "lateral_paths": lateral_paths,
+            **default,
+            **data,
+            "model_source": model_source,
+        }
+        yield f"data: {json.dumps({'done': True, 'data': payload}, ensure_ascii=False)}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream")
 

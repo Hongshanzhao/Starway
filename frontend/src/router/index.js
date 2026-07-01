@@ -76,6 +76,9 @@ router.beforeEach((to) => {
   if (to.meta.requiresAuth && !authState.user) {
     return { path: '/auth/login', query: { redirect: to.fullPath } }
   }
+  if (authState.user?.role === 'admin' && !to.path.startsWith('/admin') && !to.path.startsWith('/auth')) {
+    return '/admin/dashboard'
+  }
   if (to.meta.requiresAdmin && authState.user?.role !== 'admin') {
     return '/'
   }

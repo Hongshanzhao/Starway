@@ -20,7 +20,7 @@
           <el-form-item label="姓名"><el-input v-model="form.name" /></el-form-item>
           <el-form-item label="邮箱"><el-input v-model="form.email" /></el-form-item>
           <el-form-item label="教育背景"><el-input v-model="form.education_text" type="textarea" :rows="3" /></el-form-item>
-          <el-form-item label="技能证书"><el-input v-model="form.skills_certs_text" type="textarea" :rows="3" /></el-form-item>
+          <el-form-item label="技能与工具"><el-input v-model="form.skills_certs_text" type="textarea" :rows="3" /></el-form-item>
           <el-form-item label="手机号"><el-input v-model="form.phone" /></el-form-item>
         </el-form>
         <el-button type="primary" :loading="saving" @click="save">保存资料</el-button>

@@ -43,7 +43,6 @@ def get_student_ability(student_id):
             "major": row["major"] or "",
             "grade": row["grade"] or "",
             "skills": set(_load_json(row["skills"], [])),
-            "certificates": set(_load_json(row["certificates"], [])),
             "soft_abilities": _load_json(row["soft_abilities"], {}),
             "internships": row["internships"] or "",
             "education_json": _load_json(row["education_json"], {}),
@@ -64,20 +63,22 @@ def get_job_abilities(job_name):
         job = job_repository.get_job_by_name(job_name)
         if profile:
             return {
+                "job_name": job_name,
+                "category": (job or {}).get("industry") or (job or {}).get("job_category") or "",
                 "skills": set(_load_json(profile["skills"], [])),
-                "certificates": set(_load_json(profile["certificates"], [])),
                 "soft_abilities": _load_json(profile["soft_abilities"], {}),
                 "job_description": job["job_description"] if job else "",
             }
         if job:
             generated = build_job_profile(job)
             return {
+                "job_name": job.get("job_name") or job_name,
+                "category": job.get("industry") or job.get("job_category") or "",
                 "skills": set(generated["skills"]),
-                "certificates": set(generated["certificates"]),
                 "soft_abilities": generated["soft_abilities"],
                 "job_description": job["job_description"] or "",
             }
-        return {"skills": set(), "certificates": set(), "soft_abilities": {}, "job_description": ""}
+        return {"job_name": job_name, "category": "", "skills": set(), "soft_abilities": {}, "job_description": ""}
     finally:
         conn.close()
 
@@ -85,8 +86,9 @@ def get_job_abilities(job_name):
 def _job_abilities_from_row(row):
     generated = build_job_profile(row)
     return {
+        "job_name": row.get("job_name") or row.get("job_title"),
+        "category": row.get("industry") or row.get("job_category") or "",
         "skills": set(generated["skills"]),
-        "certificates": set(generated["certificates"]),
         "soft_abilities": generated["soft_abilities"],
         "job_description": row.get("job_description") or "",
     }
@@ -100,27 +102,28 @@ def compute_match(student_ability, job_ability, generate_gap=False, job_name=Non
     )
     skill_fit = len(overlap) / len(required_concepts) if required_concepts else 0.0
 
-    student_certs = {s.lower() for s in student_ability.get("certificates", set())}
-    job_certs = {s.lower() for s in job_ability.get("certificates", set())}
-    cert_coverage = len(student_certs & job_certs) / len(job_certs) if job_certs else 0.0
-
+    direction_score, direction_family, direction_penalty = _direction_fit(student_ability, job_ability, job_name)
     soft_score = _soft_similarity(student_ability.get("soft_abilities", {}), job_ability.get("soft_abilities", {}))
     education_score = 80.0 if student_ability.get("grade") or student_ability.get("education_json") else 60.0
     experience_score = 75.0 if student_ability.get("internships") or student_ability.get("work_json") else 45.0
-    overall = 0.55 * skill_fit + 0.15 * cert_coverage + 0.15 * soft_score + 0.08 * (education_score / 100) + 0.07 * (experience_score / 100)
+    overall = 0.58 * skill_fit + 0.17 * direction_score + 0.12 * soft_score + 0.07 * (education_score / 100) + 0.06 * (experience_score / 100)
+    if direction_penalty:
+        overall = min(overall, 0.35)
 
     result = {
         "overall_score": round(overall * 100, 1),
         "dl_score": None,
         "skill_fit": round(skill_fit * 100, 1),
+        "direction_fit": round(direction_score * 100, 1),
         "soft_gap": round((1 - soft_score) * 100, 1),
-        "cert_coverage": round(cert_coverage * 100, 1),
         "education_score": round(education_score, 1),
         "experience_score": round(experience_score, 1),
         "debug_info": {
             "matched_skills": sorted(overlap),
             "required_skills": sorted(required_concepts),
             "missing_skills": sorted(missing_concepts),
+            "direction_family": direction_family,
+            "direction_penalty": direction_penalty,
         },
     }
     result["gap_analysis"] = generate_gap_analysis_with_llm(
@@ -130,6 +133,94 @@ def compute_match(student_ability, job_ability, generate_gap=False, job_name=Non
         use_llm=use_llm_gap,
     ) if generate_gap else {}
     return result
+
+
+ROLE_RULES = {
+    "tech": ["软件工程", "计算机", "编程", "开发", "后端", "前端", "java", "python", "vue", "react", "sql", "测试", "算法", "数据", "大数据", "机器学习"],
+    "product": ["产品", "用户研究", "需求", "原型", "figma", "axure"],
+    "design": ["设计", "ui", "ux", "视觉", "交互"],
+    "business": ["市场", "销售", "运营", "商务", "品牌"],
+    "finance": ["财务", "会计", "审计", "税务", "金融"],
+    "law": ["法务", "法律", "律师", "合规", "合同", "法学", "诉讼"],
+    "hr_admin": ["人力资源", "人事", "行政", "招聘", "薪酬", "绩效", "客服"],
+}
+
+ADJACENT_FAMILIES = {
+    "tech": {"tech", "product", "design"},
+    "product": {"product", "tech", "design", "business"},
+    "design": {"design", "product", "tech"},
+    "business": {"business", "product", "hr_admin"},
+    "finance": {"finance", "business"},
+    "law": {"law", "finance", "hr_admin"},
+    "hr_admin": {"hr_admin", "business", "law"},
+}
+
+
+def _family_from_text(text):
+    haystack = str(text or "").lower()
+    best = "general"
+    best_score = 0
+    for family, words in ROLE_RULES.items():
+        score = sum(1 for word in words if str(word).lower() in haystack)
+        if score > best_score:
+            best = family
+            best_score = score
+    return best
+
+
+def _student_family(student):
+    text = " ".join([
+        str(student.get("major") or ""),
+        " ".join(str(item) for item in student.get("skills", set())),
+        json.dumps(student.get("education_json") or {}, ensure_ascii=False),
+        json.dumps(student.get("project_json") or [], ensure_ascii=False),
+    ])
+    return _family_from_text(text)
+
+
+def _job_family(job_ability, job_name=None):
+    category = str(job_ability.get("category") or "")
+    category_family = _family_from_category(category)
+    if category_family != "general":
+        return category_family
+    text = " ".join([
+        str(job_name or job_ability.get("job_name") or ""),
+        category,
+        " ".join(str(item) for item in job_ability.get("skills", set())),
+        str(job_ability.get("job_description") or ""),
+    ])
+    return _family_from_text(text)
+
+
+def _family_from_category(category):
+    text = str(category or "").lower()
+    if any(word in text for word in ["技术", "开发", "测试", "算法", "数据", "计算机", "软件"]):
+        return "tech"
+    if any(word in text for word in ["产品"]):
+        return "product"
+    if any(word in text for word in ["设计", "ui", "ux"]):
+        return "design"
+    if any(word in text for word in ["运营", "市场", "销售", "商务"]):
+        return "business"
+    if any(word in text for word in ["财务", "会计", "审计", "金融"]):
+        return "finance"
+    if any(word in text for word in ["法务", "法律", "合规"]):
+        return "law"
+    if any(word in text for word in ["行政", "人事", "人力", "hr", "职能"]):
+        return "hr_admin"
+    return "general"
+
+
+def _direction_fit(student, job_ability, job_name=None):
+    student_family = _student_family(student)
+    job_family = _job_family(job_ability, job_name)
+    if student_family == "general" or job_family == "general":
+        return 0.55, f"{student_family}->{job_family}", False
+    if student_family == job_family:
+        return 1.0, f"{student_family}->{job_family}", False
+    if job_family in ADJACENT_FAMILIES.get(student_family, {student_family}):
+        return 0.72, f"{student_family}->{job_family}", False
+    return 0.05, f"{student_family}->{job_family}", True
 
 
 def _soft_similarity(student_soft, job_soft):
@@ -147,7 +238,7 @@ def _soft_similarity(student_soft, job_soft):
 def _fallback_gap_analysis(student_ability, job_ability, match_detail, need_skills=None):
     need_skills = need_skills if need_skills is not None else []
     return {
-        "base": f"当前综合匹配度为 {match_detail['overall_score']}%。这个分数不只是“能不能投”的判断，更像是一张成长地图：你已经具备学历、基础学习能力和部分通用素养，可以从目标岗位的真实职责出发，把已有经历重新组织成岗位语言。若画像信息还不完整，建议先补充教育、项目、实习和技能证书，系统会给出更精准的排序。",
+        "base": f"当前综合匹配度为 {match_detail['overall_score']}%。这个分数不只是“能不能投”的判断，更像是一张成长地图：你已经具备学历、基础学习能力和部分通用素养，可以从目标岗位的真实职责出发，把已有经历重新组织成岗位语言。若画像信息还不完整，建议先补充教育、项目、实习、技能和作品证据，系统会给出更精准的排序。",
         "skills": "技能补齐建议优先按“岗位高频要求 -> 能快速做出作品 -> 面试可讲清楚”的顺序推进。" + (
             "当前建议先补齐 " + "、".join(need_skills[:6]) + "。每个技能不要只停留在课程学习，最好配一个小作品：例如接口服务、数据看板、自动化脚本、部署记录或性能优化笔记。"
             if need_skills else
@@ -251,11 +342,19 @@ def recommend():
         return jsonify({"error": "学生不存在"}), 404
 
     results = []
+    hard_negative_results = []
     for row in job_repository.all_jobs():
         job_name = row["job_name"]
         detail = compute_match(student, _job_abilities_from_row(row), generate_gap=False, job_name=job_name)
-        results.append({**row, **detail, "job_name": job_name})
+        item = {**row, **detail, "job_name": job_name}
+        if detail.get("debug_info", {}).get("direction_penalty"):
+            hard_negative_results.append(item)
+        else:
+            results.append(item)
     results.sort(key=lambda item: item["overall_score"], reverse=True)
+    if len(results) < limit:
+        hard_negative_results.sort(key=lambda item: item["overall_score"], reverse=True)
+        results.extend(hard_negative_results[:limit - len(results)])
     return jsonify({"results": results[:limit], "total": len(results)})
 
 
@@ -312,16 +411,12 @@ def match_stream():
 
     def generate():
         yield f"data: {json.dumps({'type': 'base', 'data': base_detail}, ensure_ascii=False)}\n\n"
-        json_chunks = []
         try:
             yield f"data: {json.dumps({'type': 'gap', 'field': 'base', 'text': fallback_gap['base']}, ensure_ascii=False)}\n\n"
-            for chunk in call_llm_stream(stream_prompt, temperature=0.45, max_tokens=1100):
+            for chunk in call_llm_stream(stream_prompt, temperature=0.35, max_tokens=650):
                 if chunk:
                     yield f"data: {json.dumps({'type': 'gap_stream', 'field': 'ai', 'text': chunk}, ensure_ascii=False)}\n\n"
-            for chunk in call_llm_stream(prompt, temperature=0.3, max_tokens=900):
-                if chunk:
-                    json_chunks.append(chunk)
-            gap = _extract_gap_json(''.join(json_chunks), fallback_gap)
+            gap = fallback_gap
         except Exception:
             gap = fallback_gap
         for key, value in gap.items():

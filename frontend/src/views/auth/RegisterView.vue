@@ -117,9 +117,15 @@ refreshCaptcha()
 
 <style scoped>
 .auth-card {
-  width: min(440px, 100%);
-  background: rgba(255,255,255,.68);
-  box-shadow: 0 28px 70px rgba(79, 124, 99, .14);
+  width: min(480px, 100%);
+  position: relative;
+  z-index: 3;
+  color: #f8fff9;
+  background: rgba(5,18,20,.94);
+  border-color: rgba(255,255,255,.42);
+  box-shadow: 0 38px 110px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.34);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 h2 {
@@ -130,7 +136,25 @@ h2 {
 
 p {
   margin: 0 0 22px;
-  color: var(--muted);
+  color: rgba(239,250,244,.86);
+}
+
+.auth-card :deep(.el-form-item__label) {
+  color: rgba(239,250,244,.92);
+  font-weight: 600;
+}
+
+.auth-card :deep(.el-input__wrapper) {
+  background: rgba(255,255,255,.22);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.34) inset;
+}
+
+.auth-card :deep(.el-input__inner) {
+  color: #f8fff9;
+}
+
+.auth-card :deep(.el-input__inner::placeholder) {
+  color: rgba(239,250,244,.48);
 }
 
 .captcha-row {
@@ -149,9 +173,9 @@ p {
   border-radius: 12px;
   cursor: pointer;
   overflow: hidden;
-  background: rgba(255,255,255,.62);
-  box-shadow: inset 0 0 0 1px rgba(127,143,163,.18);
-  color: var(--muted);
+  background: rgba(255,255,255,.26);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.34);
+  color: rgba(239,250,244,.74);
 }
 
 .captcha-box:disabled {
@@ -175,7 +199,7 @@ img {
 
 .hint {
   margin-top: 8px;
-  color: var(--muted);
+  color: rgba(239,250,244,.76);
   font-size: 13px;
 }
 
@@ -186,10 +210,11 @@ img {
 .switch {
   margin-top: 18px;
   text-align: center;
-  color: var(--muted);
+  color: rgba(239,250,244,.78);
 }
 
 .switch a {
-  color: var(--mist-blue);
+  color: #dceadf;
+  font-weight: 700;
 }
 </style>

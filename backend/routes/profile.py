@@ -46,7 +46,7 @@ def ensure_required_soft_abilities(soft_abilities):
 
 def _rule_extract_profile(text, data=None):
     data = data or {}
-    skills = split_skills(data.get("skills_certs") or data.get("skills") or "")
+    skills = split_skills(data.get("skills") or data.get("skills_certs") or "")
     skill_pool = [
         "Python", "Java", "SQL", "Vue", "React", "Flask", "Django", "Docker",
         "ECharts", "Pandas", "NumPy", "Excel", "Tableau", "Power BI",
@@ -56,7 +56,6 @@ def _rule_extract_profile(text, data=None):
     ]
     skills += [s for s in skill_pool if s.lower() in text.lower()]
     skills = list(dict.fromkeys(skills))
-    certs = [item for item in split_skills(data.get("skills_certs") or "") if "证" in item or "PMP" in item.upper()]
     education = data.get("education", "")
     work = data.get("work", "")
     project = data.get("project", "")
@@ -69,7 +68,7 @@ def _rule_extract_profile(text, data=None):
         project = sections.get("project", "")
     return {
         "skills": skills,
-        "certificates": certs,
+        "certificates": [],
         "soft_abilities": ensure_required_soft_abilities({}),
         "education": _parse_education(f"{education}\n{text}"),
         "work_experience": _parse_list_text(work, ["company", "position", "description"]),
@@ -131,7 +130,7 @@ def _split_resume_sections(text):
             key = "work"
         if any(word in line for word in ["项目", "作品"]):
             key = "project"
-        if any(word in line for word in ["技能", "证书"]):
+        if any(word in line for word in ["技能", "能力", "工具"]):
             key = "skills"
         current = key or current
         if current:
@@ -147,7 +146,7 @@ def _extract_with_llm(text, data=None):
         return _rule_extract_profile(text, data)
     prompt = f"""
 请从以下大学生简历/档案文本中抽取结构化 JSON：
-字段：skills, certificates, soft_abilities, education, work_experience, project_experience。
+字段：skills, soft_abilities, education, work_experience, project_experience。
 只返回 JSON。
 
 文本：
@@ -180,11 +179,17 @@ def _education_dict(value):
     return {}
 
 
+def _skills_text(value):
+    if isinstance(value, (list, tuple, set)):
+        return "、".join(str(item).strip() for item in value if str(item).strip())
+    return str(value or "")
+
+
 @profile_bp.route("/submit", methods=["POST"])
 def submit_profile():
     data = request.get_json(silent=True) or {}
     user_id = data.get("user_id")
-    text = "\n".join(str(data.get(k, "")) for k in ["education", "work", "project", "skills_certs", "summary"])
+    text = "\n".join(str(data.get(k, "")) for k in ["education", "work", "project", "skills", "skills_certs", "summary"])
     ability = _extract_with_llm(text, data)
     education = _education_dict(ability.get("education"))
     major = data.get("major") or education.get("major", "")
@@ -207,7 +212,7 @@ def submit_profile():
                 major,
                 data.get("grade") or education.get("degree", ""),
                 json.dumps(ability.get("skills", []), ensure_ascii=False),
-                json.dumps(ability.get("certificates", []), ensure_ascii=False),
+                json.dumps([], ensure_ascii=False),
                 data.get("work", ""),
                 json.dumps(data.get("interests", []), ensure_ascii=False),
                 80,
@@ -217,7 +222,7 @@ def submit_profile():
                 data.get("education", ""),
                 data.get("work", ""),
                 data.get("project", ""),
-                data.get("skills_certs", ""),
+                _skills_text(data.get("skills") or data.get("skills_certs", "")),
                 data.get("summary", ""),
                 json.dumps(ability.get("soft_abilities", {}), ensure_ascii=False),
                 json.dumps(education, ensure_ascii=False),
@@ -233,7 +238,6 @@ def submit_profile():
     return jsonify({
         "student_id": student_id,
         "skills": ability.get("skills", []),
-        "certificates": ability.get("certificates", []),
         "soft_abilities": ability.get("soft_abilities", {}),
     })
 
@@ -259,7 +263,6 @@ def upload_resume():
             "text": text,
             "parse_warning": parse_warning,
             "skills": ability.get("skills", []),
-            "certificates": ability.get("certificates", []),
             "soft_abilities": ability.get("soft_abilities", {}),
             "education_json": ability.get("education", {}),
             "work_json": ability.get("work_experience", []),
@@ -270,7 +273,6 @@ def upload_resume():
             "text": "",
             "parse_warning": _friendly_parse_warning(suffix),
             "skills": [],
-            "certificates": [],
             "soft_abilities": ensure_required_soft_abilities({}),
             "education_json": {},
             "work_json": [],
@@ -367,7 +369,6 @@ def get_profile(student_id):
     data = dict(row)
     for key, default in [
         ("skills", []),
-        ("certificates", []),
         ("soft_abilities", {}),
         ("education_json", {}),
         ("work_json", []),
@@ -375,4 +376,5 @@ def get_profile(student_id):
         ("interest_scores", {}),
     ]:
         data[key] = _json_loads(data.get(key), default)
+    data.pop("certificates", None)
     return jsonify(data)

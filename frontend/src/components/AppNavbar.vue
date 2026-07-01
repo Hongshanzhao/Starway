@@ -40,15 +40,15 @@ import { authState, logout } from '@/utils/auth'
 
 const router = useRouter()
 const links = [
-  { to: '/jobs/search', label: '岗位中心' },
-  { to: '/assessment', label: '测评中心' },
-  { to: '/match/recommend', label: '人岗匹配' },
-  { to: '/assistant/chat', label: 'AI 助手' },
+  { to: '/jobs/search', label: '岗位星图' },
+  { to: '/assessment', label: '兴趣罗盘' },
+  { to: '/match/recommend', label: '人岗回声' },
+  { to: '/assistant/chat', label: 'AI 旅伴' },
 ]
 
 function handleLogout() {
   logout()
-  router.push('/')
+  router.push('/auth/login')
 }
 </script>
 

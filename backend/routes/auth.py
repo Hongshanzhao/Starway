@@ -242,7 +242,7 @@ def register():
                 "刚刚加入 Starway，建议先完善学生画像。",
                 json.dumps({
                     "创新能力": {"score": 3, "description": "待通过项目经历进一步识别。"},
-                    "学习能力": {"score": 3, "description": "待通过技能和证书进一步识别。"},
+                    "学习能力": {"score": 3, "description": "待通过技能、项目和作品证据进一步识别。"},
                     "抗压能力": {"score": 3, "description": "待通过实习和项目经历进一步识别。"},
                     "沟通能力": {"score": 3, "description": "待通过协作经历进一步识别。"},
                     "实习能力": {"score": 2, "description": "建议补充实习或项目作品。"},

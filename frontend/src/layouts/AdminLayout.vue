@@ -18,7 +18,7 @@
           <strong>数据管理中心</strong>
           <span>用户、岗位、报告、图谱与 AI 任务监控</span>
         </div>
-        <el-button text @click="$router.push('/')">返回前台</el-button>
+        <el-button class="logout-btn" plain @click="handleLogout">退出登录 / 切换账号</el-button>
       </header>
       <RouterView />
     </main>
@@ -26,8 +26,11 @@
 </template>
 
 <script setup>
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterLink, RouterView, useRouter } from 'vue-router'
 import { Bot, Boxes, ChartColumn, FileText, Gauge, Network, UsersRound } from 'lucide-vue-next'
+import { logout } from '@/utils/auth'
+
+const router = useRouter()
 
 const menu = [
   { to: '/admin/dashboard', label: '数据总览', icon: Gauge },
@@ -38,6 +41,11 @@ const menu = [
   { to: '/admin/graph', label: '图谱构建', icon: Network },
   { to: '/admin/ai-tools', label: 'AI 产出监控', icon: Bot },
 ]
+
+function handleLogout() {
+  logout()
+  router.push('/auth/login')
+}
 </script>
 
 <style scoped>
@@ -135,6 +143,10 @@ nav a:hover {
   color: var(--muted);
 }
 
+.logout-btn {
+  border-radius: 14px;
+}
+
 @media (max-width: 860px) {
   .admin-shell {
     grid-template-columns: 1fr;
@@ -143,6 +155,11 @@ nav a:hover {
   .admin-side {
     position: static;
     height: auto;
+  }
+
+  .admin-top {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

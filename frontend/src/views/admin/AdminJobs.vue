@@ -1,7 +1,7 @@
 <template>
   <section class="page">
     <div class="summary-grid">
-      <article><span>岗位总数</span><strong>{{ rows.length }}</strong></article>
+      <article><span>岗位总数</span><strong>{{ total }}</strong></article>
       <article><span>覆盖行业</span><strong>{{ industryCount }}</strong></article>
       <article><span>覆盖城市</span><strong>{{ cityCount }}</strong></article>
       <article><span>画像字段完整度</span><strong>{{ qualityRate }}%</strong></article>
@@ -35,11 +35,19 @@
       <div class="head">
         <h1 class="section-title">岗位管理</h1>
         <div class="actions">
-          <el-input v-model="keyword" placeholder="搜索岗位/公司/行业/城市" class="search" />
+          <el-input
+            v-model="keyword"
+            clearable
+            placeholder="搜索岗位/公司/行业/城市"
+            class="search"
+            @keyup.enter="search"
+            @clear="search"
+          />
+          <el-button :loading="loading" @click="search">搜索</el-button>
           <el-button type="primary" @click="dialog = true">新增岗位</el-button>
         </div>
       </div>
-      <el-table :data="filtered" stripe height="620">
+      <el-table v-loading="loading" :data="rows" stripe height="620">
         <el-table-column prop="id" label="ID" width="90" />
         <el-table-column prop="job_name" label="岗位" min-width="180" />
         <el-table-column prop="company" label="公司" min-width="150" />
@@ -58,6 +66,19 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="pager">
+        <span>当前第 {{ page }} 页，每页 {{ size }} 条</span>
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="size"
+          background
+          layout="prev, pager, next, sizes, jumper"
+          :page-sizes="[20, 50, 100]"
+          :total="total"
+          @current-change="load"
+          @size-change="handleSizeChange"
+        />
+      </div>
     </GlassCard>
 
     <el-dialog v-model="dialog" title="岗位信息" width="640px">
@@ -84,7 +105,7 @@
 
 <script setup>
 import * as echarts from 'echarts'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { adminApi, jobsApi } from '@/api'
 import { softAbilityRows } from '@/utils/format'
 import GlassCard from '@/components/GlassCard.vue'
@@ -93,6 +114,10 @@ import RadarChart from '@/components/RadarChart.vue'
 const rows = ref([])
 const analytics = ref({})
 const keyword = ref('')
+const total = ref(0)
+const page = ref(1)
+const size = ref(20)
+const loading = ref(false)
 const dialog = ref(false)
 const profileDialog = ref(false)
 const profile = ref({})
@@ -101,10 +126,10 @@ const industryEl = ref(null)
 const cityEl = ref(null)
 const salaryEl = ref(null)
 const charts = []
+let searchTimer = null
 
-const filtered = computed(() => rows.value.filter((row) => !keyword.value || JSON.stringify(row).includes(keyword.value)))
-const industryCount = computed(() => new Set(rows.value.map((row) => row.industry || row.job_category).filter(Boolean)).size)
-const cityCount = computed(() => new Set(rows.value.map((row) => row.location || row.city).filter(Boolean)).size)
+const industryCount = computed(() => analytics.value.summary?.industry_count || new Set(rows.value.map((row) => row.industry || row.job_category).filter(Boolean)).size)
+const cityCount = computed(() => analytics.value.summary?.city_count || new Set(rows.value.map((row) => row.location || row.city).filter(Boolean)).size)
 const softRows = computed(() => softAbilityRows(profile.value.soft_abilities))
 const qualityItems = computed(() => {
   const q = analytics.value.quality || {}
@@ -122,14 +147,27 @@ const qualityRate = computed(() => {
 })
 
 async function load() {
-  const data = await adminApi.jobs()
-  rows.value = data.list || []
-  analytics.value = data.analytics || {}
-  await nextTick()
-  render()
+  loading.value = true
+  try {
+    const data = await adminApi.jobs({
+      page: page.value,
+      size: size.value,
+      keyword: keyword.value || undefined,
+    })
+    rows.value = data.list || []
+    total.value = Number(data.total || rows.value.length || 0)
+    analytics.value = data.analytics || {}
+    await nextTick()
+    render()
+  } finally {
+    loading.value = false
+  }
 }
 
 function rowQuality(row) {
+  if (row.quality_score !== undefined && row.quality_score !== null) {
+    return Math.max(0, Math.min(100, Number(row.quality_score) || 0))
+  }
   let score = 0
   if (row.skills) score += 34
   if ((row.job_description || '').length > 30) score += 33
@@ -152,6 +190,16 @@ async function save() {
 
 async function remove(id) {
   await adminApi.deleteJob(id)
+  load()
+}
+
+function search() {
+  page.value = 1
+  load()
+}
+
+function handleSizeChange() {
+  page.value = 1
   load()
 }
 
@@ -196,7 +244,14 @@ function render() {
 }
 
 onMounted(load)
-onBeforeUnmount(() => charts.forEach((chart) => chart.dispose()))
+watch(keyword, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(search, 380)
+})
+onBeforeUnmount(() => {
+  clearTimeout(searchTimer)
+  charts.forEach((chart) => chart.dispose())
+})
 </script>
 
 <style scoped>
@@ -213,5 +268,6 @@ onBeforeUnmount(() => charts.forEach((chart) => chart.dispose()))
 .quality-list { display:grid; gap:18px; padding-top:16px; }
 .quality-list strong { display:block; margin-bottom:8px; color:#59616b; }
 .search { width: 280px; }
+.pager { display:flex; justify-content:space-between; align-items:center; gap:16px; padding-top:18px; color:var(--muted); }
 @media (max-width: 920px) { .summary-grid,.chart-grid { grid-template-columns:1fr; } .head,.actions { align-items:stretch; flex-direction:column; } .search { width:100%; } }
 </style>

@@ -16,11 +16,46 @@
 
       <div class="dashboard-grid">
         <GlassCard class="metric-card">
-          <h2>匹配指标</h2>
-          <div ref="metricChartEl" class="chart"></div>
+          <div class="card-title-row">
+            <h2>匹配指标</h2>
+            <span>5 项能力面</span>
+          </div>
+          <div class="metric-summary">
+            <div>
+              <strong>{{ Math.round(insights.score || 0) }}%</strong>
+              <span>综合匹配</span>
+            </div>
+            <p>{{ metricSummary }}</p>
+          </div>
+          <div class="metric-bars">
+            <article v-for="item in metricItems" :key="item.name">
+              <div>
+                <strong>{{ item.name }}</strong>
+                <span>{{ Math.round(Number(item.value || 0)) }}%</span>
+              </div>
+              <el-progress :percentage="Math.round(Number(item.value || 0))" :stroke-width="9" />
+            </article>
+          </div>
         </GlassCard>
-        <GlassCard>
-          <h2>技能缺口</h2>
+        <GlassCard class="skill-card">
+          <div class="card-title-row">
+            <h2>技能缺口</h2>
+            <span>{{ gapSummary }}</span>
+          </div>
+          <div class="gap-overview">
+            <article>
+              <strong>{{ (insights.matched_skills || []).length }}</strong>
+              <span>已匹配</span>
+            </article>
+            <article>
+              <strong>{{ (insights.missing_skills || []).length }}</strong>
+              <span>待补齐</span>
+            </article>
+            <article>
+              <strong>{{ (insights.required_skills || []).length }}</strong>
+              <span>岗位高频</span>
+            </article>
+          </div>
           <div class="skill-box">
             <section>
               <span>已匹配</span>
@@ -34,6 +69,13 @@
               <div class="tag-list">
                 <el-tag v-for="item in insights.missing_skills || []" :key="item" type="warning">{{ item }}</el-tag>
                 <p v-if="!insights.missing_skills?.length" class="muted">暂无明显缺口</p>
+              </div>
+            </section>
+            <section>
+              <span>岗位高频</span>
+              <div class="tag-list compact">
+                <el-tag v-for="item in (insights.required_skills || []).slice(0, 6)" :key="item" type="info">{{ item }}</el-tag>
+                <p v-if="!insights.required_skills?.length" class="muted">暂无岗位高频技能</p>
               </div>
             </section>
           </div>
@@ -89,8 +131,7 @@
 </template>
 
 <script setup>
-import * as echarts from 'echarts'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
@@ -109,10 +150,31 @@ const insights = ref({})
 const content = ref('')
 const original = ref('')
 const editMode = ref(false)
-const metricChartEl = ref(null)
-let metricChart
 
 const displayContent = computed(() => plainTextFromMarkdown(content.value))
+const metricItems = computed(() => {
+  const items = insights.value.metrics || []
+  if (items.length) return items
+  return [
+    { name: '技能匹配', value: 0 },
+    { name: '方向匹配', value: 0 },
+    { name: '学历基础', value: 0 },
+    { name: '经历基础', value: 0 },
+    { name: '软能力', value: 0 },
+  ]
+})
+const metricSummary = computed(() => {
+  const sorted = [...metricItems.value].sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+  const top = sorted[0]
+  const low = sorted[sorted.length - 1]
+  if (!top || !low) return '暂无指标数据，生成报告后会自动补齐。'
+  return `当前优势在${top.name}，下一步优先补${low.name}。`
+})
+const gapSummary = computed(() => {
+  const missing = insights.value.missing_skills?.length || 0
+  if (missing > 0) return `优先补齐 ${missing} 项`
+  return '缺口较少，重点沉淀证据'
+})
 const reportLead = computed(() => {
   const missing = insights.value.missing_skills?.slice(0, 3).join('、')
   if (missing) return `当前最需要优先补齐：${missing}。报告已结合匹配数据生成行动路线。`
@@ -199,45 +261,15 @@ function escapeHtml(value) {
   }[char]))
 }
 
-function renderMetricChart() {
-  if (!metricChartEl.value) return
-  if (!metricChart) metricChart = echarts.init(metricChartEl.value)
-  const metrics = insights.value.metrics || []
-  metricChart.setOption({
-    color: ['#7F8FA3', '#A5B5B2', '#C9B1B0'],
-    tooltip: {},
-    radar: {
-      indicator: metrics.map((item) => ({ name: item.name, max: 100 })),
-      radius: '62%',
-      splitArea: { areaStyle: { color: ['rgba(255,255,255,.42)', 'rgba(165,181,178,.12)'] } },
-      axisName: { color: '#59616b' },
-    },
-    series: [{
-      type: 'radar',
-      areaStyle: { color: 'rgba(127,143,163,.22)' },
-      data: [{ value: metrics.map((item) => Number(item.value || 0)), name: '匹配指标' }],
-    }],
-  })
-}
-
 onMounted(async () => {
   try {
     report.value = await reportApi.detail(route.params.reportId)
     content.value = plainTextFromMarkdown(report.value.content || '')
     original.value = content.value
     insights.value = await reportApi.insights(route.params.reportId).catch(() => ({}))
-    await nextTick()
-    renderMetricChart()
-    window.addEventListener('resize', renderMetricChart)
   } finally {
     loading.value = false
   }
-})
-
-watch(insights, () => nextTick(renderMetricChart), { deep: true })
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', renderMetricChart)
-  metricChart?.dispose()
 })
 </script>
 
@@ -297,11 +329,6 @@ onBeforeUnmount(() => {
   gap: 18px;
 }
 
-.chart {
-  width: 100%;
-  height: 300px;
-}
-
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
@@ -346,16 +373,96 @@ h2 {
   white-space: pre-wrap;
 }
 
+.card-title-row {
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.card-title-row h2 {
+  margin: 0;
+}
+
+.card-title-row span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.metric-summary {
+  min-height: 116px;
+  margin-bottom: 14px;
+  border-radius: 16px;
+  padding: 18px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  color: white;
+  background: linear-gradient(135deg, rgba(127,143,163,.95), rgba(165,181,178,.86));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22);
+}
+
+.metric-summary strong {
+  display: block;
+  font-size: 38px;
+  line-height: 1;
+}
+
+.metric-summary span {
+  display: block;
+  margin-top: 6px;
+  color: rgba(255,255,255,.78);
+}
+
+.metric-summary p {
+  margin: 0;
+  color: rgba(255,255,255,.86);
+  line-height: 1.55;
+}
+
+.gap-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.gap-overview article {
+  min-height: 74px;
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  align-content: center;
+  background: rgba(255,255,255,.62);
+  box-shadow: inset 0 0 0 1px rgba(127,143,163,.12);
+}
+
+.gap-overview strong {
+  color: #59616b;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.gap-overview span {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .skill-box,
 .timeline,
-.readiness-list {
+.readiness-list,
+.metric-bars {
   display: grid;
-  gap: 16px;
+  gap: 12px;
 }
 
 .skill-box section,
 .timeline article,
 .readiness-list article,
+.metric-bars article,
 .stream-tip {
   border-radius: 16px;
   padding: 14px;
@@ -363,15 +470,23 @@ h2 {
   box-shadow: inset 0 0 0 1px rgba(127,143,163,.12);
 }
 
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .skill-box span,
 .timeline strong,
-.readiness-list strong {
+.readiness-list strong,
+.metric-bars strong {
   display: inline-flex;
   margin-bottom: 8px;
   color: #68778a;
   font-weight: 700;
 }
 
+.metric-bars article div,
 .readiness-list article div {
   display: flex;
   justify-content: space-between;

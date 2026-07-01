@@ -2,7 +2,7 @@
   <section class="page-shell page">
     <GlassCard>
       <h1 class="section-title">学生画像</h1>
-      <p class="muted">手动填写或上传简历，后端会抽取技能、证书与软能力画像。</p>
+      <p class="muted">手动填写或上传简历，后端会抽取技能、经历与软能力画像。</p>
       <el-tabs v-model="mode">
         <el-tab-pane label="手动填写" name="manual">
           <el-form :model="form" label-position="top" class="form-grid">
@@ -12,7 +12,7 @@
             <el-form-item label="教育经历"><el-input v-model="form.education" type="textarea" :rows="3" /></el-form-item>
             <el-form-item label="实习经历"><el-input v-model="form.work" type="textarea" :rows="3" /></el-form-item>
             <el-form-item label="项目经历"><el-input v-model="form.project" type="textarea" :rows="3" /></el-form-item>
-            <el-form-item label="技能证书"><el-input v-model="form.skills_certs" placeholder="Python, SQL, CET-6" /></el-form-item>
+            <el-form-item label="技能与工具"><el-input v-model="form.skills" placeholder="Python, SQL, Vue, Java" /></el-form-item>
             <el-form-item label="自我总结"><el-input v-model="form.summary" type="textarea" :rows="4" /></el-form-item>
           </el-form>
           <el-button type="primary" :loading="loading" @click="submit">生成画像</el-button>
@@ -61,9 +61,8 @@
             <p>{{ parsedProject || '未识别到项目经历' }}</p>
           </section>
         </div>
-        <div v-if="safeParsedSkills.length || safeParsedCertificates.length" class="tag-list">
+        <div v-if="safeParsedSkills.length" class="tag-list">
           <el-tag v-for="skill in safeParsedSkills" :key="skill">{{ skill }}</el-tag>
-          <el-tag v-for="cert in safeParsedCertificates" :key="cert" type="warning">{{ cert }}</el-tag>
         </div>
         <details v-if="parsed.text" class="resume-details">
           <summary>查看原文预览</summary>
@@ -94,7 +93,6 @@ const parsed = ref({})
 const errorMessage = ref('')
 const acceptTypes = '.pdf,.doc,.docx,.txt,.md'
 const safeParsedSkills = computed(() => toList(parsed.value.skills))
-const safeParsedCertificates = computed(() => toList(parsed.value.certificates))
 const parsedEducation = computed(() => formatEducation(parsed.value.education_json))
 const parsedWork = computed(() => formatExperience(parsed.value.work_json))
 const parsedProject = computed(() => formatExperience(parsed.value.project_json))
@@ -106,7 +104,7 @@ const form = reactive({
   education: '',
   work: '',
   project: '',
-  skills_certs: '',
+  skills: '',
   summary: '',
 })
 
@@ -175,9 +173,8 @@ async function upload() {
       text: toText(result?.text),
       parse_warning: toText(result?.parse_warning),
       skills: toList(result?.skills),
-      certificates: toList(result?.certificates),
     }
-    form.skills_certs = [...safeParsedSkills.value, ...safeParsedCertificates.value].join(', ')
+    form.skills = safeParsedSkills.value.join(', ')
     form.education = formatEducation(result?.education_json)
     form.work = formatExperience(result?.work_json)
     form.project = formatExperience(result?.project_json)

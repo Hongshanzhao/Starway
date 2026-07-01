@@ -18,8 +18,8 @@
               <span>核心技能</span>
             </div>
             <div>
-              <strong>{{ certificates.length || 0 }}</strong>
-              <span>证书线索</span>
+              <strong>{{ evidenceList.length || 0 }}</strong>
+              <span>作品证据</span>
             </div>
             <div>
               <strong>{{ softRows.length }}</strong>
@@ -123,7 +123,6 @@ const profile = ref({})
 const aiProfile = ref({})
 
 const skills = computed(() => listify(profile.value.skills))
-const certificates = computed(() => listify(profile.value.certificates))
 const softRows = computed(() => softAbilityRows(profile.value.soft_abilities))
 const jobName = computed(() => profile.value.job_name || '目标岗位')
 
@@ -162,9 +161,9 @@ const skillGroups = computed(() => {
       type: 'success',
     },
     {
-      title: '证书/资质线索',
-      desc: '不是所有岗位都强制证书，但有证书时要转化为能力证据。',
-      items: certificates.value,
+      title: '项目证明点',
+      desc: '把技能放到真实问题里，形成简历和面试可验证证据。',
+      items: primary.slice(0, 3),
       type: 'warning',
     },
   ]

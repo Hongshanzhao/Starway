@@ -85,7 +85,7 @@ const gaps = ref([])
 const aiDraft = ref('')
 const scoreItems = computed(() => [
   { label: '技能匹配', value: base.value.skill_fit ?? 0 },
-  { label: '证书覆盖', value: base.value.cert_coverage ?? 0 },
+  { label: '方向匹配', value: base.value.direction_fit ?? 0 },
   { label: '学历基础', value: base.value.education_score ?? 0 },
   { label: '经历基础', value: base.value.experience_score ?? 0 },
 ])
@@ -103,8 +103,8 @@ const priorityItems = computed(() => {
   if (Number(base.value.skill_fit || 0) < 60) {
     items.push({ title: '先补技能证据', text: `优先补 ${missingSkills.value.slice(0, 3).join('、') || '岗位高频技能'}，每项配一个小作品。` })
   }
-  if (Number(base.value.cert_coverage || 0) < 30) {
-    items.push({ title: '证书不是重点但要解释', text: '没有证书时，用项目、课程成果或实习记录证明同等能力。' })
+  if (Number(base.value.direction_fit || 0) < 50) {
+    items.push({ title: '确认岗位方向', text: '当前目标和画像方向跨度较大，建议优先选择专业、技能或项目经历能迁移的相邻岗位。' })
   }
   if (Number(base.value.experience_score || 0) < 70) {
     items.push({ title: '补经历表达', text: '把课程项目、社团任务或练习项目改写成岗位语言，写清动作和结果。' })

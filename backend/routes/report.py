@@ -21,9 +21,10 @@ def _report_prompt(student, job_name, match_detail):
 
 重要要求：
 1. 必须围绕目标岗位「{job_name}」展开，不能输出通用模板。
-2. 必须引用学生已有信息，例如专业、年级、技能、项目/实习经历、证书或缺失项。
-3. 输出普通中文纯文本，不要使用 Markdown 标记，不要出现 #、**、```、模板占位符。
-4. 每段都要给出具体判断或可执行动作，避免空泛鸡汤。
+2. 必须引用学生已有信息，例如专业、年级、技能、项目/实习经历、作品证据或缺失项。
+3. 输出普通中文纯文本，不要使用 Markdown 标记，不要出现 #、**、*、```、模板占位符。
+4. 全文使用第二人称“你/你的”，不要使用“您/您的”，不要写成客服聊天。
+5. 每段都要给出具体判断或可执行动作，避免空泛鸡汤。
 
 学生画像：{json.dumps(student, ensure_ascii=False, default=list)}
 
@@ -32,7 +33,7 @@ def _report_prompt(student, job_name, match_detail):
 
 报告必须包含：
 一、自我认知总结：说明学生当前基础、优势证据和画像缺口。
-二、人岗匹配分析：解释综合匹配、已匹配技能、缺口技能、证书/软能力/经历准备度。
+二、人岗匹配分析：解释综合匹配、方向匹配、已匹配技能、缺口技能、软能力和经历准备度。
 三、目标岗位理解：说明该岗位真实工作内容、产出物和常见评价标准。
 四、职业发展路径：给出入门、胜任、进阶三个阶段，每阶段说明能力重点和作品/经历证据。
 五、90 天行动计划：按 0-30 天、31-60 天、61-90 天列出具体任务、交付物和检查标准。
@@ -56,9 +57,45 @@ def _clean_report_text(value):
     text = str(value or "")
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = text.replace("*", "")
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"^\s*[-*]\s+", "· ", text, flags=re.MULTILINE)
+    text = _to_second_person(text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _clean_report_chunk(value):
+    text = str(value or "")
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = text.replace("*", "")
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return _to_second_person(text)
+
+
+def _to_second_person(text):
+    return (
+        str(text or "")
+        .replace("您好", "你好")
+        .replace("您已经", "你已经")
+        .replace("您可以", "你可以")
+        .replace("您的", "你的")
+        .replace("您", "你")
+    )
+
+
+def _local_polish_report(text, job_name="目标岗位"):
+    cleaned = _clean_report_text(text)
+    if not cleaned:
+        return ""
+    if len(cleaned) > 1800:
+        return cleaned
+    return f"""润色后的职业规划报告：{job_name}
+
+{cleaned}
+
+补充建议
+请把上面的报告继续落到三个可执行层面：第一，围绕{job_name}整理 15 到 20 条真实 JD，标出高频技能、常见任务和交付物；第二，把已有项目或实习经历改写成“问题、动作、工具、结果、复盘”的结构；第三，每周复盘一次投递反馈、技能卡点和作品完成度。这样导出后的报告不仅能阅读，也能直接指导后续行动。"""
 
 
 def _looks_generic_report(content, job_name):
@@ -98,7 +135,6 @@ def _fallback_report(student, job_name, match_detail):
     missing = debug.get("missing_skills") or []
     required = debug.get("required_skills") or []
     skills = sorted(student.get("skills", []))
-    certs = sorted(student.get("certificates", []))
     major = student.get("major") or "专业信息待完善"
     grade = student.get("grade") or "年级待完善"
     has_project = bool(student.get("project_json"))
@@ -108,18 +144,17 @@ def _fallback_report(student, job_name, match_detail):
     missing_text = "、".join(missing[:8]) if missing else "暂无明显技能缺口，下一步重点是用项目证据证明能力"
     required_text = "、".join(required[:10]) if required else "请继续补充岗位 JD 或选择数据库中的具体岗位"
     skills_text = "、".join(skills[:12]) if skills else "技能信息待完善"
-    certs_text = "、".join(certs[:6]) if certs else "暂无证书记录"
     project_text = "已有项目经历，可进一步沉淀为作品集和面试案例。" if has_project else "项目经历暂少，需要优先做一个贴近岗位的作品。"
     work_text = "已有实习/工作经历，可将职责改写成目标岗位语言。" if has_work else "实习经历暂少，需要用课程项目、开源任务或模拟业务项目补足经历证据。"
     return f"""职业生涯发展报告：{job_name}
 
 一、自我认知总结
-你的当前画像显示：专业为{major}，年级为{grade}，已记录技能包括{skills_text}，证书记录为{certs_text}。这说明你已经有一部分可用于求职表达的基础材料，但还需要把这些材料和「{job_name}」的真实职责连接起来。{project_text}{work_text}
+你的当前画像显示：专业为{major}，年级为{grade}，已记录技能包括{skills_text}。这说明你已经有一部分可用于求职表达的基础材料，但还需要把这些材料和「{job_name}」的真实职责连接起来。{project_text}{work_text}
 
 对你来说，下一步不是单纯多学几门课，而是把“我会什么”改造成“我能为{job_name}交付什么”。简历、作品集和面试回答都应该围绕岗位产出展开，例如需求理解、方案设计、执行过程、结果指标、复盘改进。
 
 二、人岗匹配分析
-系统计算的综合匹配度为 {match_detail.get("overall_score")}%。技能匹配为 {match_detail.get("skill_fit")}%，证书覆盖为 {match_detail.get("cert_coverage")}%，学历基础为 {match_detail.get("education_score")}，经历基础为 {match_detail.get("experience_score")}。这个结果不是简单判断“能不能投”，而是告诉你目前最该补哪里。
+系统计算的综合匹配度为 {match_detail.get("overall_score")}%。技能匹配为 {match_detail.get("skill_fit")}%，方向匹配为 {match_detail.get("direction_fit")}%，学历基础为 {match_detail.get("education_score")}，经历基础为 {match_detail.get("experience_score")}。这个结果不是简单判断“能不能投”，而是告诉你目前最该补哪里。
 
 已经能迁移到{job_name}的能力：{matched_text}。
 岗位侧高频要求：{required_text}。
@@ -140,7 +175,7 @@ def _fallback_report(student, job_name, match_detail):
 进阶阶段：开始关注行业背景、团队协作和岗位晋升要求。你需要能说清楚“这个岗位在团队中解决什么问题”“我的方案为什么合理”“如果资源有限我如何取舍”。这类表达会明显提升面试可信度。
 
 五、90 天行动计划
-0-30 天：完成岗位拆解。收集 20 条{job_name} JD，统计高频技能和职责；选择 2 项最高频缺口集中学习；同步完善学生画像中的教育背景、项目经历、实习经历和证书字段。检查标准是形成一页岗位能力清单和一页个人差距清单。
+0-30 天：完成岗位拆解。收集 20 条{job_name} JD，统计高频技能和职责；选择 2 项最高频缺口集中学习；同步完善学生画像中的教育背景、项目经历、实习经历和作品证据。检查标准是形成一页岗位能力清单和一页个人差距清单。
 
 31-60 天：完成作品验证。围绕{job_name}做一个可展示项目或案例，把需求、方案、执行、结果、复盘写完整。检查标准是至少产出一个作品链接或文档、一段 150 字简历描述、三分钟项目讲述稿。
 
@@ -203,11 +238,11 @@ def generate_report_stream():
         chunks = []
         if _remote_ai_enabled():
             try:
-                for chunk in call_llm_stream(prompt, temperature=0.55, max_tokens=3200):
+                for chunk in call_llm_stream(prompt, temperature=0.45, max_tokens=1600):
                     if not chunk:
                         continue
                     chunks.append(chunk)
-                    yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'chunk': _clean_report_chunk(chunk)}, ensure_ascii=False)}\n\n"
             except Exception:
                 chunks = []
         content = _clean_report_text("".join(chunks))
@@ -230,8 +265,9 @@ def polish_report():
 请润色以下职业规划报告，保持原意并提升专业度。
 输出要求：
 1. 使用普通中文纯文本，不要使用 Markdown 标记。
-2. 不要输出 **、#、```、- 这类格式符号。
-3. 保留清晰段落和编号，方便用户直接保存、复制和导出。
+2. 不要输出 **、*、#、```、- 这类格式符号。
+3. 全文使用第二人称“你/你的”，不要使用“您/您的”。
+4. 保留清晰段落和编号，方便用户直接保存、复制和导出。
 
 原文：
 {text}
@@ -255,6 +291,7 @@ def polish_report_stream():
 2. 围绕目标岗位「{job_name}」补充具体建议、行动标准、简历表达方式和复盘指标。
 3. 不要套模板，不要空泛鼓励；如果原文有数据，请解释数据对行动的意义。
 4. 保留清晰编号，便于用户直接导出。
+5. 全文使用第二人称“你/你的”，不要使用“您/您的”，不要写成聊天对话。
 
 原文：
 {text}
@@ -263,16 +300,16 @@ def polish_report_stream():
     def generate():
         chunks = []
         try:
-            for chunk in call_llm_stream(prompt, temperature=0.5, max_tokens=3000):
+            for chunk in call_llm_stream(prompt, temperature=0.38, max_tokens=1200):
                 if not chunk:
                     continue
                 chunks.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'chunk': _clean_report_chunk(chunk)}, ensure_ascii=False)}\n\n"
         except Exception:
             chunks = []
         content = _clean_report_text("".join(chunks))
         if _looks_generic_report(content, job_name):
-            content = _fallback_report({"skills": set()}, job_name, {"overall_score": 0, "debug_info": {}})
+            content = _local_polish_report(text, job_name)
             yield f"data: {json.dumps({'chunk': content}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
 
@@ -330,7 +367,7 @@ def get_report_insights(report_id):
         "score": detail.get("overall_score", 0),
         "metrics": [
             {"name": "技能匹配", "value": detail.get("skill_fit", 0)},
-            {"name": "证书覆盖", "value": detail.get("cert_coverage", 0)},
+            {"name": "方向匹配", "value": detail.get("direction_fit", 0)},
             {"name": "学历基础", "value": detail.get("education_score", 0)},
             {"name": "经历基础", "value": detail.get("experience_score", 0)},
             {"name": "软能力", "value": max(0, 100 - float(detail.get("soft_gap", 0) or 0))},
@@ -353,7 +390,6 @@ def _profile_readiness(student):
         bool(student.get("major")),
         bool(student.get("grade")),
         bool(student.get("skills")),
-        bool(student.get("certificates")),
         bool(student.get("education_json")),
         bool(student.get("project_json")),
         bool(student.get("work_json") or student.get("internships")),

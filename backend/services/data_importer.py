@@ -104,6 +104,11 @@ def ensure_core_tables(conn=None):
             FOREIGN KEY(candidate_id) REFERENCES candidates(candidate_id)
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_title ON jobs(job_title)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_category ON jobs(job_category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_city ON jobs(city)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_salary_avg ON jobs(salary_avg)")
     if own_conn:
         conn.commit()
         conn.close()

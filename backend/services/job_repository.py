@@ -67,6 +67,17 @@ def row_to_dict(row) -> Optional[Dict]:
     return normalize_job(dict(row)) if row else None
 
 
+def _quality_score(row: Dict) -> int:
+    score = 0
+    if str(row.get("skills") or "").strip():
+        score += 34
+    if int(row.get("description_len") or 0) > 30:
+        score += 33
+    if int(row.get("requirements_len") or 0) > 20:
+        score += 33
+    return score
+
+
 def clear_cache():
     _cached_all_jobs.cache_clear()
     _cached_list_job_names.cache_clear()
@@ -219,6 +230,71 @@ def search_jobs(keyword: str = "", industry: str = "", company_size: str = "",
             params + [size, offset],
         ).fetchall()
         return total, [normalize_job(dict(row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def admin_list_jobs(keyword: str = "", industry: str = "", city: str = "",
+                    page: int = 1, size: int = 20) -> Tuple[int, List[Dict]]:
+    conditions = []
+    params = []
+    keyword = str(keyword or "").strip()
+    if keyword:
+        conditions.append("(job_title LIKE ? OR company_name LIKE ? OR job_category LIKE ? OR city LIKE ? OR skills LIKE ?)")
+        params.extend([f"%{keyword}%"] * 5)
+    if industry:
+        conditions.append("job_category = ?")
+        params.append(industry)
+    if city:
+        conditions.append("city = ?")
+        params.append(city)
+
+    page = max(int(page or 1), 1)
+    size = min(max(int(size or 20), 1), 100)
+    offset = (page - 1) * size
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    conn = get_db()
+    try:
+        total = conn.execute(f"SELECT COUNT(*) AS total FROM jobs {where_clause}", params).fetchone()["total"]
+        rows = conn.execute(
+            f"""
+            SELECT
+              rowid AS id,
+              job_id AS job_code,
+              job_title AS job_name,
+              job_title,
+              job_category AS industry,
+              job_category,
+              company_name AS company,
+              company_name,
+              city AS location,
+              city,
+              company_size,
+              company_type,
+              salary_min,
+              salary_max,
+              salary_avg,
+              salary_min AS _salary_min,
+              salary_max AS _salary_max,
+              skills,
+              SUBSTR(COALESCE(job_description, ''), 1, 180) AS job_description,
+              SUBSTR(COALESCE(requirements, ''), 1, 180) AS requirements,
+              LENGTH(COALESCE(job_description, '')) AS description_len,
+              LENGTH(COALESCE(requirements, '')) AS requirements_len,
+              publish_date AS updated_at,
+              publish_date
+            FROM jobs {where_clause}
+            ORDER BY rowid DESC
+            LIMIT ? OFFSET ?
+            """,
+            params + [size, offset],
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = normalize_job(dict(row))
+            item["quality_score"] = _quality_score(item)
+            result.append(item)
+        return total, result
     finally:
         conn.close()
 

@@ -6,25 +6,34 @@ from services.llm_client import LLMClient, chunk_text, sse_event
 assistant_bp = Blueprint("assistant", __name__, url_prefix="/api/assistant")
 
 
+def _clean_ai_text(value: str) -> str:
+    text = str(value or "")
+    text = text.replace("**", "").replace("*", "")
+    text = text.replace("您好", "你好").replace("您的", "你的").replace("您", "你")
+    return text
+
+
 def _messages(message: str, context) -> list:
     system = (
         "你是 Starway 大学生职业规划系统的智能助手。"
-        "回答必须围绕求职方向、岗位匹配、技能提升、简历优化和学习路径。"
-        "用户只要给出任何专业、年级、目标岗位、技能、经历或困惑，就必须直接作答。"
+        "你是万能型职业与学习 AI 助手，可以回答职业规划、岗位选择、简历优化、项目设计、学习路径、面试准备、报告解读、情绪困惑和具体执行问题。"
+        "如果上下文里有报告或学生画像，要主动分析其中的关键信息；但回答不能被报告限制，用户问什么就答什么。"
+        "用户只要给出任何专业、年级、目标岗位、技能、经历、报告片段或困惑，就必须直接作答。"
         "禁止把已经给出的信息说成信息不足；确实缺信息时，也要先基于现有信息给出可执行方案。"
-        "禁止输出泛泛的 AI 概念解释或通用模板。"
+        "禁止输出泛泛的 AI 概念解释或通用模板。禁止输出 Markdown 星号、粗体符号和星号项目符号。"
     )
     ctx = f"\n用户背景：{context}" if context else ""
     user_prompt = f"""
 用户原话：{message}
 {ctx}
 
-请直接给出职业规划建议，结构固定为：
-1. 方向判断：引用用户原话中的专业、年级或目标岗位，判断目标是否合理，并给出相邻方向；
-2. 三步行动：按 30/60/90 天拆解技能、作品、简历和面试准备；
-3. 可验证成果：列出用户完成后应留下的作品、简历条目或证明材料。
+请直接回答用户问题，并根据问题类型灵活组织：
+1. 如果是方向/岗位/报告问题，先给判断，再说明依据；
+2. 如果是学习/求职/面试问题，给具体步骤、优先级和可验证成果；
+3. 如果是开放困惑，给利弊分析、选择标准和下一步动作。
 
 不要说“信息不足”“无法判断”“请提供更多信息”。不要把用户的问题改写成通用职业规划。
+不要输出 * 或 **，直接用普通中文段落和编号。
 """
     return [
         {"role": "system", "content": system},
@@ -77,6 +86,9 @@ def _needs_retry(answer: str) -> bool:
         "只输入了问号",
         "直接套用",
         "零起点",
+        "很抱歉",
+        "抱歉",
+        "对不起",
     ]
     head = (answer or "")[:500]
     return any(phrase in head for phrase in bad_phrases)
@@ -112,6 +124,7 @@ def _direct_plan_answer(message: str, context) -> str:
                 or target
             )
             break
+    role_focus = _target_role_focus(target)
     major = "当前专业"
     if "软件工程" in text:
         major = "软件工程"
@@ -123,17 +136,48 @@ def _direct_plan_answer(message: str, context) -> str:
             grade = item
             break
     return f"""1. 方向判断
-你现在给出的关键信息是“{message}”。如果你是{major}{grade}，目标指向“{target}”，这个方向是合理的：软件工程背景可以迁移到数据分析里的 Python/SQL、数据处理、业务系统理解和自动化能力。相邻方向可以同时关注数据分析师、BI 分析师、数据运营、数据产品助理；如果你的代码基础更强，也可以保留数据开发或后端数据工程作为备选。
+你现在给出的关键信息是“{message}”。如果你是{major}{grade}，目标指向“{target}”，这个方向可以推进，但不要只停留在“想做”。你需要把已有课程、项目、技能和岗位真实要求对齐起来，重点证明自己能完成{role_focus["core_task"]}。相邻方向可以同时关注{role_focus["adjacent"]}，这样投递时不会被单一岗位卡住。
 
 2. 三步行动
-30 天：先补齐入门闭环。每天固定练 SQL 查询、Python pandas、Excel/可视化和基础统计，把 3 个真实岗位 JD 拆成技能清单。完成一个小项目，例如校园消费、招聘岗位或电商订单数据分析，产出清洗脚本、分析结论和图表。
+30 天：先补齐入门闭环。收集 15 到 20 条“{target}”相关 JD，统计高频技能、常见任务、工具和作品要求；每天固定练 1 个核心技能点，优先处理{role_focus["skills"]}。同时完成一个小练习，产出能截图、能复盘、能放进简历的材料。
 
-60 天：做一份像样的作品集。选择一个更贴近业务的问题，例如用户增长、岗位薪资、留存转化或销售漏斗，完成“问题定义 -> 数据清洗 -> 指标体系 -> 可视化看板 -> 业务建议”。同时把项目整理成网页、Notebook 或 PDF 报告，准备 3 分钟讲解稿。
+60 天：做一份像样的作品集。围绕“{target}”选择一个贴近真实业务的项目，按“问题定义 -> 方案设计 -> 执行过程 -> 结果展示 -> 复盘改进”整理。项目不一定很大，但必须体现{role_focus["project_value"]}，并准备 3 分钟讲解稿。
 
-90 天：进入求职表达。简历里突出“{major} + {target}”的复合优势：会写脚本、懂数据库、能做可视化、能把分析落成工具。准备 SQL 高频题、统计指标解释、项目复盘和业务 case；投递时优先选择数据分析实习、BI、数据运营、数据产品助理。
+90 天：进入求职表达。简历里突出“{major} + {target}”的复合优势：你用什么工具、解决什么问题、交付什么结果。准备岗位高频面试题、项目复盘、作品演示和自我介绍；投递时每周记录投递数量、回复率、面试卡点和简历修改点。
 
 3. 可验证成果
-你至少要留下：1 个 GitHub/作品集链接、1 份数据分析报告、1 个可交互看板或图表页面、30 道 SQL 练习记录、1 份岗位 JD 拆解表、1 版针对“{target}”的简历。这样面试时就不是“我想做”，而是“我已经按这个岗位的方式做过一次”。"""
+你至少要留下：1 份岗位 JD 拆解表、1 个贴近“{target}”的作品或案例、1 版针对该岗位的简历、1 份项目讲解稿、1 张技能差距清单、1 份投递复盘表。这样面试时就不是“我想做”，而是“我已经按这个岗位的方式做过一次”。"""
+
+
+def _target_role_focus(target: str) -> dict:
+    text = str(target or "")
+    if any(word in text for word in ["前端", "Vue", "React", "Web"]):
+        return {
+            "core_task": "页面交互、组件复用、接口联调、响应式布局和性能体验优化",
+            "adjacent": "前端开发实习、Web 开发、低代码平台开发、测试开发、产品技术支持",
+            "skills": "HTML/CSS、JavaScript、Vue 或 React、组件化、接口请求、Git 和基础工程化",
+            "project_value": "真实页面、可复用组件、接口数据流、异常状态、移动端适配和部署链接",
+        }
+    if any(word in text for word in ["数据", "分析", "BI"]):
+        return {
+            "core_task": "数据清洗、指标拆解、可视化分析和业务建议输出",
+            "adjacent": "数据分析师、BI 分析师、数据运营、数据产品助理",
+            "skills": "SQL、Python pandas、Excel、可视化、基础统计和业务指标",
+            "project_value": "指标体系、清洗过程、图表结论、业务建议和可复现数据处理流程",
+        }
+    if any(word in text for word in ["后端", "Java", "Python", "服务端"]):
+        return {
+            "core_task": "接口设计、数据模型、鉴权、异常处理、日志和部署联调",
+            "adjacent": "后端开发、Java 开发、Python 开发、测试开发、运维开发",
+            "skills": "一门后端语言、数据库、HTTP/API、缓存、测试、Git 和部署",
+            "project_value": "可运行接口、数据库表设计、接口文档、测试记录和部署说明",
+        }
+    return {
+        "core_task": "岗位要求中的关键任务，并用作品或经历证明交付能力",
+        "adjacent": "同类初级岗位、实习岗位、助理岗位和技能相邻方向",
+        "skills": "岗位 JD 中出现频率最高的 2 到 3 项技能",
+        "project_value": "真实问题、执行过程、结果证据和可复盘改进",
+    }
 
 
 def _instant_career_answer(message: str, context) -> str:
@@ -175,10 +219,10 @@ def _answer_with_quality_gate(message: str, context, provider: str):
         client.used_fallback = False
         return _instant_career_answer(message, {}), client
 
-    client = LLMClient(provider=provider, timeout=18)
+    client = LLMClient(provider=provider, timeout=12)
     attempted = set()
     try:
-        answer = client.chat_remote_only(_messages(message, context), max_tokens=1200)
+        answer = client.chat_remote_only(_messages(message, context), max_tokens=700)
         attempted.add(client.provider)
     except Exception:
         client.provider = "local"
@@ -189,7 +233,7 @@ def _answer_with_quality_gate(message: str, context, provider: str):
         try:
             retry_answer = client.chat_remote_only(
                 _retry_messages(message, context),
-                max_tokens=1400,
+                max_tokens=760,
                 skip_providers=attempted,
             )
             if retry_answer:
@@ -202,7 +246,7 @@ def _answer_with_quality_gate(message: str, context, provider: str):
         try:
             backup_answer = client.chat_remote_only(
                 _retry_messages(message, context),
-                max_tokens=1400,
+                max_tokens=760,
                 skip_providers=attempted,
             )
             if backup_answer:
@@ -213,7 +257,7 @@ def _answer_with_quality_gate(message: str, context, provider: str):
 
     if _needs_retry(answer) or _is_off_topic(message, answer):
         client.last_error = (client.last_error + " | " if client.last_error else "") + "remote answer quality warning"
-    return answer, client
+    return _clean_ai_text(answer), client
 
 
 def _stream_answer(message: str, context, provider: str):
@@ -221,37 +265,52 @@ def _stream_answer(message: str, context, provider: str):
         client = LLMClient(provider="local")
         client.used_fallback = False
         answer = _instant_career_answer(message, {})
-        for chunk in chunk_text(answer, size=40):
+        for chunk in chunk_text(_clean_ai_text(answer), size=32):
             yield chunk, client, False
         return
 
-    client = LLMClient(provider=provider, timeout=18)
+    client = LLMClient(provider=provider, timeout=12)
     chunks = []
+    released_head = False
+    yield "我先基于你给的信息开始分析，马上给你可执行建议。\n\n", client, False
     try:
         if not hasattr(client, "stream_chat"):
-            answer = client.chat_remote_only(_messages(message, context), max_tokens=1200)
-            for chunk in chunk_text(answer, size=40):
+            answer = client.chat_remote_only(_messages(message, context), max_tokens=700)
+            for chunk in chunk_text(_clean_ai_text(answer), size=32):
                 chunks.append(chunk)
                 yield chunk, client, False
             yield "", client, True
             return
-        for chunk in client.stream_chat(_messages(message, context), temperature=0.3, max_tokens=1400):
+        for chunk in client.stream_chat(_messages(message, context), temperature=0.3, max_tokens=700):
             if not chunk:
                 continue
-            chunks.append(chunk)
-            yield chunk, client, False
+            clean_chunk = _clean_ai_text(chunk)
+            chunks.append(clean_chunk)
+            if not released_head:
+                head = "".join(chunks)
+                if _needs_retry(head):
+                    chunks = []
+                    break
+                if len(head) < 36 and "\n" not in head and "。" not in head and "：" not in head:
+                    continue
+                released_head = True
+                yield head, client, False
+                continue
+            yield clean_chunk, client, False
     except Exception:
         client.used_fallback = True
         client.provider = "local"
         chunks = []
 
     answer = "".join(chunks)
+    if answer and not released_head and not _needs_retry(answer) and not _is_off_topic(message, answer):
+        yield answer, client, False
     if not answer or _needs_retry(answer) or _is_off_topic(message, answer):
         client.used_fallback = True
-        fallback = _direct_plan_answer(message, context)
+        fallback = _clean_ai_text(_direct_plan_answer(message, context))
         if answer:
             yield "\n\n补充成可执行版本：\n", client, False
-        for chunk in chunk_text(fallback, size=40):
+        for chunk in chunk_text(fallback, size=32):
             yield chunk, client, False
         client.provider = "local" if not answer else client.provider
     yield "", client, True
@@ -286,7 +345,7 @@ def chat():
                 if not last_client:
                     yield sse_event("done", {"provider": provider or "local", "fallback": True, "error": ""})
             except Exception as exc:
-                fallback = _instant_career_answer(message, context)
+                fallback = _clean_ai_text(_instant_career_answer(message, context))
                 yield sse_event("delta", {"content": fallback})
                 yield sse_event("done", {"provider": "local", "fallback": True, "error": str(exc)})
 
@@ -299,7 +358,7 @@ def chat():
         client = LLMClient(provider="local")
         client.used_fallback = True
         client.last_error = str(exc)
-        answer = _direct_plan_answer(message, context)
+        answer = _clean_ai_text(_direct_plan_answer(message, context))
         fallback = True
 
     if _needs_retry(answer) or _is_off_topic(message, answer):
@@ -307,7 +366,7 @@ def chat():
         fallback = client.used_fallback or client.is_local
 
     return jsonify({
-        "answer": answer,
+        "answer": _clean_ai_text(answer),
         "provider": client.provider,
         "usage": {"fallback": fallback, "error": client.last_error},
     })

@@ -133,8 +133,8 @@ const journeyItems = computed(() => [
   },
   {
     index: '04',
-    title: '证书与亮点',
-    text: (profile.value.certificates || []).join('、') || profile.value.skills_certs_text || (skills.value || []).join('、') || '待补充证书和技能亮点',
+    title: '技能与亮点',
+    text: profile.value.skills_certs_text || (skills.value || []).join('、') || '待补充技能、工具和作品亮点',
   },
 ])
 

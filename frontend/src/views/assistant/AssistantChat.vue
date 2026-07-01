@@ -37,6 +37,8 @@ const messagesBox = ref(null)
 const profileContext = ref(null)
 const providerState = ref('AI API')
 const usedFallback = ref(false)
+let revealTimer = null
+let pendingText = ''
 const statusText = computed(() => {
   if (streaming.value) return '正在生成'
   return usedFallback.value ? '本地兜底' : providerState.value
@@ -61,7 +63,7 @@ async function send() {
       stream: true,
       context: isGreeting(text) ? null : profileContext.value,
     }, (event) => {
-      if (event.type === 'delta') ai.content += event.content || event.chunk || ''
+      if (event.type === 'delta') queueReveal(ai, cleanText(event.content || event.chunk || ''))
       if (event.type === 'done') {
         providerState.value = event.provider || providerState.value
         usedFallback.value = Boolean(event.fallback)
@@ -72,8 +74,45 @@ async function send() {
     ai.content = ai.content || '这次连接没有完成。你可以直接再发一次，或把目标岗位、已有技能和简历片段分开发给我。'
     ElMessage.error(error.message || 'AI 助手暂时没有响应')
   } finally {
+    flushReveal(ai)
     streaming.value = false
   }
+}
+
+function queueReveal(message, text) {
+  pendingText += text || ''
+  if (revealTimer) return
+  revealTimer = window.setInterval(() => {
+    if (!pendingText) {
+      clearInterval(revealTimer)
+      revealTimer = null
+      return
+    }
+    const step = pendingText.length > 120 ? 16 : 8
+    message.content += pendingText.slice(0, step)
+    pendingText = pendingText.slice(step)
+    nextTick(scrollBottom)
+  }, 14)
+}
+
+function flushReveal(message) {
+  if (revealTimer) {
+    clearInterval(revealTimer)
+    revealTimer = null
+  }
+  if (pendingText) {
+    message.content += cleanText(pendingText)
+    pendingText = ''
+  }
+}
+
+function cleanText(value) {
+  return String(value || '')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/您好/g, '你好')
+    .replace(/您的/g, '你的')
+    .replace(/您/g, '你')
 }
 
 function scrollBottom() {

@@ -53,7 +53,7 @@ def provider_chain(provider: Optional[str] = None) -> List[str]:
 
 
 class LLMClient:
-    def __init__(self, provider: Optional[str] = None, timeout: int = 18):
+    def __init__(self, provider: Optional[str] = None, timeout: int = 12):
         self.requested_provider = (provider or os.getenv("LLM_PROVIDER") or os.getenv("LLM_MODE") or "local").lower()
         self.provider = normalize_provider(provider)
         self.last_error = ""

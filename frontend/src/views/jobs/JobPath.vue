@@ -23,8 +23,15 @@
             <div class="stage-kicker">阶段 {{ index + 1 }}</div>
             <h3>{{ item.title }}</h3>
             <p>{{ item.description }}</p>
-            <div class="mini-tags">
-              <span v-for="tag in item.outputs" :key="tag">{{ tag }}</span>
+            <div class="stage-evidence">
+              <section>
+                <strong>交付物</strong>
+                <span v-for="tag in item.outputs" :key="tag">{{ tag }}</span>
+              </section>
+              <section>
+                <strong>检查点</strong>
+                <span v-for="tag in item.checkpoints" :key="tag">{{ tag }}</span>
+              </section>
             </div>
           </article>
         </div>
@@ -63,25 +70,37 @@
         <section class="route-lane">
           <div class="lane-head">
             <h2>90 天推进路线</h2>
-            <span>每个阶段都要留下可展示证据</span>
+            <span>{{ aiLoading ? 'AI 正在生成个性化路线' : '每个阶段都要留下可展示证据' }}</span>
           </div>
-          <div class="plan-list">
+          <div v-if="aiLoading && !actionPlan.length" class="ai-generating">
+            <LoadingSkeleton />
+          </div>
+          <div v-else-if="actionPlan.length" class="plan-list">
             <article v-for="item in actionPlan" :key="item.title">
               <strong>{{ item.title }}</strong>
               <p>{{ item.text }}</p>
               <span>{{ item.output }}</span>
             </article>
           </div>
+          <el-empty v-else description="AI 暂未返回推进路线，请稍后重试" />
         </section>
 
         <section class="route-lane">
           <div class="lane-head">
             <h2>风险检查</h2>
-            <span>避免只学习、不产出、不复盘</span>
+            <span>{{ aiLoading ? '正在结合画像识别风险' : '结合你的画像生成' }}</span>
           </div>
-          <ul class="risk-list">
-            <li v-for="item in riskList" :key="item">{{ item }}</li>
-          </ul>
+          <div v-if="aiLoading && !riskList.length" class="risk-loading">
+            <LoadingSkeleton />
+          </div>
+          <div v-else-if="riskList.length" class="risk-list">
+            <article v-for="item in riskList" :key="item.title">
+              <strong>{{ item.title }}</strong>
+              <p>{{ item.description }}</p>
+              <span>{{ item.mitigation }}</span>
+            </article>
+          </div>
+          <el-empty v-else description="AI 暂未返回风险检查，请稍后重试" />
         </section>
       </div>
     </template>
@@ -100,65 +119,115 @@ const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const aiLoading = ref(false)
+const aiStreamText = ref('')
 const data = ref({})
 const currentJob = computed(() => data.value.job_name || route.params.jobName || '目标岗位')
 
 const verticalStages = computed(() => {
-  if (data.value.vertical_stages?.length) return data.value.vertical_stages
+  if (data.value.vertical_stages?.length) return normalizeStages(data.value.vertical_stages)
   const raw = data.value.vertical_path || []
   const stages = raw.map((item, index) => ({
     title: `${item.from_job || currentJob.value} → ${item.to_job || `进阶阶段 ${index + 1}`}`,
     description: item.description || item.why_next || `${currentJob.value} 的进阶重点是把基础执行转化为稳定交付，并逐步承担更复杂的问题拆解。`,
-      outputs: [
+    outputs: [
       '岗位能力清单',
       ...(item.transferable_skills || []).slice(0, 2),
       ...(item.learning_plan || []).slice(0, 1),
     ].filter(Boolean),
+    checkpoints: normalizeTextList(item.checkpoints || item.transferable_skills || ['能说明能力迁移']),
   }))
-  return [
+  return normalizeStages([
     {
       title: `${currentJob.value} 入门准备`,
       description: '先看真实 JD，确认高频技能、工作任务和交付物。这个阶段的目标是能理解岗位语言，并完成一个小练习证明基础能力。',
       outputs: ['JD 拆解表', '技能优先级', '学习笔记'],
+      checkpoints: ['能解释岗位产出', '能完成基础练习'],
     },
     ...stages,
     {
       title: `${currentJob.value} 独立胜任`,
       description: '把学习成果沉淀为一个完整项目或案例，能讲清需求、方案、执行、结果和复盘。到这个阶段才适合更集中地投递。',
       outputs: ['作品集', '简历条目', '面试讲稿'],
+      checkpoints: ['能讲清项目过程', '能用结果证明价值'],
     },
-  ]
+  ])
 })
 
 const lateralCards = computed(() => data.value.lateral_cards?.length ? data.value.lateral_cards : (data.value.lateral_paths || []))
 
-const actionPlan = computed(() => data.value.action_plan?.length ? data.value.action_plan : [
-  {
-    title: '0-30 天：拆岗位',
-    text: `收集 20 条 ${currentJob.value} JD，标出共同技能、职责、工具和产出物。选择 2 个最高频缺口开始补齐。`,
-    output: '产出：岗位能力清单 + 个人差距清单',
-  },
-  {
-    title: '31-60 天：做作品',
-    text: `围绕 ${currentJob.value} 做一个小项目或案例，不求大而全，但要完整展示从问题到结果的过程。`,
-    output: '产出：作品链接/文档 + 150 字简历描述',
-  },
-  {
-    title: '61-90 天：投递复盘',
-    text: '开始小批量投递，每周复盘回复率、面试问题和技能卡点。根据反馈微调简历关键词和项目讲述。',
-    output: '产出：投递记录表 + 面试题复盘',
-  },
-])
+const isAiPathReady = computed(() => data.value.model_source === 'ai')
+const actionPlan = computed(() => isAiPathReady.value && data.value.action_plan?.length
+  ? data.value.action_plan.map((item, index) => normalizePlanItem(item, index))
+  : [])
 
-const riskList = computed(() => data.value.risk_list?.length ? data.value.risk_list : [
-  '只收藏课程但没有作品：每学一个技能都要配一个可展示输出。',
-  '简历只写“熟悉/了解”：改成“用什么方法，在什么场景，解决什么问题”。',
-  '横向迁移跨度过大：优先选择技能、行业或工作方式至少有一项相邻的方向。',
-  '投递后不复盘：每周至少记录一次反馈，判断是关键词、项目深度还是表达问题。',
-])
+const riskList = computed(() => isAiPathReady.value && data.value.risk_list?.length
+  ? data.value.risk_list.map((item, index) => normalizeRiskItem(item, index))
+  : [])
 
 function listText(value, fallback) {
-  return Array.isArray(value) && value.length ? value.slice(0, 5).join('、') : fallback
+  const items = normalizeTextList(value)
+  return items.length ? items.slice(0, 5).join('、') : fallback
+}
+
+function normalizeStages(items) {
+  return (Array.isArray(items) ? items : []).map((item, index) => ({
+    title: cleanText(item?.title || item?.stage || `阶段 ${index + 1}`),
+    description: cleanText(item?.description || item?.text || item?.why_next || '围绕目标岗位完成阶段能力建设。'),
+    outputs: normalizeTextList(item?.outputs || item?.output || item?.deliverables).slice(0, 4),
+    checkpoints: normalizeTextList(item?.checkpoints || item?.checkpoint || item?.criteria).slice(0, 4),
+  })).map((item) => ({
+    ...item,
+    outputs: item.outputs.length ? item.outputs : ['阶段作品'],
+    checkpoints: item.checkpoints.length ? item.checkpoints : ['完成复盘'],
+  }))
+}
+
+function normalizeTextList(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeTextList(item)).filter(Boolean)
+  }
+  if (value && typeof value === 'object') {
+    return [cleanText(value.title || value.name || value.output || value.text || value.description || value.risk || value.mitigation)]
+      .filter(Boolean)
+  }
+  const text = cleanText(value)
+  if (!text) return []
+  return text
+    .split(/[、,，;；\n]/)
+    .map((item) => cleanText(item))
+    .filter((item) => item.length > 1)
+}
+
+function normalizePlanItem(item, index) {
+  if (typeof item === 'string') {
+    return { title: `阶段 ${index + 1}`, text: cleanText(item), output: '形成可展示成果' }
+  }
+  return {
+    title: cleanText(item?.title || item?.stage || `阶段 ${index + 1}`),
+    text: cleanText(item?.text || item?.description || item?.task || ''),
+    output: cleanText(item?.output || item?.deliverable || item?.result || '形成可展示成果'),
+  }
+}
+
+function normalizeRiskItem(item, index) {
+  if (typeof item === 'string') {
+    return { title: `风险 ${index + 1}`, description: cleanText(item), mitigation: '用阶段复盘及时调整。' }
+  }
+  const title = cleanText(item?.risk || item?.title || item?.name || `风险 ${index + 1}`)
+  const description = cleanText(item?.description || item?.reason || item?.text || title)
+  const mitigation = cleanText(item?.mitigation || item?.solution || item?.action || item?.suggestion || '把风险拆成每周可检查的行动。')
+  return { title, description, mitigation }
+}
+
+function cleanText(value) {
+  return String(value ?? '')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/```json|```/gi, '')
+    .replace(/您好/g, '你好')
+    .replace(/您的/g, '你的')
+    .replace(/您/g, '你')
+    .trim()
 }
 
 onMounted(async () => {
@@ -168,8 +237,10 @@ onMounted(async () => {
     data.value = await jobsApi.path(route.params.jobName, studentId ? { student_id: studentId } : undefined).catch(() => ({}))
     loading.value = false
     aiLoading.value = true
+    aiStreamText.value = ''
     const query = studentId ? `?student_id=${encodeURIComponent(studentId)}` : ''
     await streamRequest(`/api/jobs/${encodeURIComponent(route.params.jobName)}/full-path-ai-stream${query}`, null, (event) => {
+      if (event.chunk) aiStreamText.value += event.chunk
       if (event.done && event.data) data.value = event.data
     }, { method: 'GET' }).catch(async () => {
       data.value = await jobsApi.pathAi(route.params.jobName, studentId ? { student_id: studentId } : undefined)
@@ -289,14 +360,45 @@ p {
   gap: 14px;
 }
 
-.mini-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
+.stage-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
 }
 
-.mini-tags span,
+.stage-evidence section {
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  background: rgba(127,143,163,.08);
+}
+
+.stage-evidence strong {
+  color: #68778a;
+  font-size: 13px;
+}
+
+.stage-evidence span {
+  position: relative;
+  padding-left: 14px;
+  color: #59616b;
+  line-height: 1.55;
+}
+
+.stage-evidence span::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .72em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a5b5b2;
+}
+
 .plan-list article span {
   border-radius: 999px;
   padding: 6px 10px;
@@ -336,14 +438,41 @@ p {
 
 .risk-list {
   margin: 0;
-  padding-left: 20px;
+  padding: 0;
+  display: grid;
+  gap: 12px;
   color: var(--muted);
-  line-height: 1.9;
+}
+
+.risk-list article {
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(255,255,255,.7);
+  box-shadow: inset 0 0 0 1px rgba(127,143,163,.12);
+}
+
+.risk-list strong {
+  display: block;
+  color: #4f5862;
+  font-size: 16px;
+}
+
+.risk-list p {
+  margin: 8px 0;
+}
+
+.risk-list span {
+  display: block;
+  border-left: 3px solid #c9b1b0;
+  padding-left: 10px;
+  color: #68778a;
+  line-height: 1.65;
 }
 
 @media (max-width: 860px) {
   .path-hero,
-  .lower-grid {
+  .lower-grid,
+  .stage-evidence {
     grid-template-columns: 1fr;
   }
 
